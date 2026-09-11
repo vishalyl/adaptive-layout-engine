@@ -20,6 +20,18 @@ export interface RenderDomProps<Ids extends string> {
   // Draws zone boundaries and per-element id/priority labels — cheap to
   // build, and it makes the algorithm visible to anyone skimming the demo.
   readonly showDebugOverlay?: boolean;
+  // Powers the element inspector (§14.6) — a click reports the id upward,
+  // the currently-selected id gets a visible highlight. Both optional: a
+  // renderer consumer that doesn't want interactivity just omits them.
+  readonly selectedElementId?: string | null;
+  readonly onSelectElement?: (id: string) => void;
+}
+
+interface NodeProps {
+  readonly element: AdElement;
+  readonly entry: LayoutEntry;
+  readonly selected?: boolean | undefined;
+  readonly onSelect?: ((id: string) => void) | undefined;
 }
 
 const rectStyle = (rect: Rect): CSSProperties => ({
@@ -31,13 +43,30 @@ const rectStyle = (rect: Rect): CSSProperties => ({
   boxSizing: 'border-box',
 });
 
-function TextNode({ element, entry }: { element: AdElement; entry: LayoutEntry }) {
+// Shared by every node: the click handler and the selection highlight.
+// Kept as a small object spread rather than its own component, since each
+// node already has its own required style fields to merge with these.
+function interactionProps(element: AdElement, selected: boolean | undefined, onSelect: ((id: string) => void) | undefined) {
+  return {
+    onClick: onSelect ? () => onSelect(element.id) : undefined,
+    style: {
+      cursor: onSelect ? 'pointer' : undefined,
+      outline: selected ? '2px solid #F2B705' : undefined,
+      outlineOffset: selected ? '-2px' : undefined,
+    } as CSSProperties,
+  };
+}
+
+function TextNode({ element, entry, selected, onSelect }: NodeProps) {
   if (!entry.placed || element.type !== 'text') return null;
   const typography = entry.typography;
+  const interaction = interactionProps(element, selected, onSelect);
   return (
     <div
+      onClick={interaction.onClick}
       style={{
         ...rectStyle(entry.rect),
+        ...interaction.style,
         fontSize: typography?.fontPx ?? element.idealFontPx,
         lineHeight: 1.25,
         fontWeight: element.weight,
@@ -56,26 +85,31 @@ function TextNode({ element, entry }: { element: AdElement; entry: LayoutEntry }
   );
 }
 
-function ImageNode({ element, entry }: { element: AdElement; entry: LayoutEntry }) {
+function ImageNode({ element, entry, selected, onSelect }: NodeProps) {
   if (!entry.placed || element.type !== 'image') return null;
+  const interaction = interactionProps(element, selected, onSelect);
   return (
     <img
       src={element.src}
       alt=""
-      style={{ ...rectStyle(entry.rect), objectFit: element.fit }}
+      onClick={interaction.onClick}
+      style={{ ...rectStyle(entry.rect), ...interaction.style, objectFit: element.fit }}
       data-element-id={element.id}
       data-role={element.role}
     />
   );
 }
 
-function ButtonNode({ element, entry }: { element: AdElement; entry: LayoutEntry }) {
+function ButtonNode({ element, entry, selected, onSelect }: NodeProps) {
   if (!entry.placed || element.type !== 'button') return null;
   const typography = entry.typography;
+  const interaction = interactionProps(element, selected, onSelect);
   return (
     <div
+      onClick={interaction.onClick}
       style={{
         ...rectStyle(entry.rect),
+        ...interaction.style,
         // The one legitimate use of flexbox in the ad render path: centring
         // a label inside a box whose size was already fully decided by the
         // resolver. Flexbox renders the decision here; it does not make one.
@@ -99,7 +133,7 @@ function ButtonNode({ element, entry }: { element: AdElement; entry: LayoutEntry
 // for one, sized exactly at the resolver's computed rect. Swapping in a
 // real QR renderer later would not touch layout at all: this component
 // only ever reads `entry.rect`.
-function ScanNode({ element, entry }: { element: AdElement; entry: LayoutEntry }) {
+function ScanNode({ element, entry, selected, onSelect }: NodeProps) {
   if (!entry.placed || element.type !== 'scan') return null;
   // A percentage `padding` here would resolve against the containing
   // block's width (the whole ad surface), not this element's own small
@@ -109,10 +143,13 @@ function ScanNode({ element, entry }: { element: AdElement; entry: LayoutEntry }
   // element. Computing the padding in px from the element's own rect avoids
   // the trap.
   const pad = Math.round(Math.min(entry.rect.w, entry.rect.h) * 0.08);
+  const interaction = interactionProps(element, selected, onSelect);
   return (
     <div
+      onClick={interaction.onClick}
       style={{
         ...rectStyle(entry.rect),
+        ...interaction.style,
         display: 'grid',
         gridTemplateColumns: 'repeat(7, 1fr)',
         gridTemplateRows: 'repeat(7, 1fr)',
@@ -185,7 +222,13 @@ function ElementOverlay({ elements }: { elements: Readonly<Record<string, Layout
   );
 }
 
-export function RenderDom<Ids extends string>({ spec, layout, showDebugOverlay }: RenderDomProps<Ids>) {
+export function RenderDom<Ids extends string>({
+  spec,
+  layout,
+  showDebugOverlay,
+  selectedElementId,
+  onSelectElement,
+}: RenderDomProps<Ids>) {
   return (
     <div
       style={{
@@ -198,15 +241,16 @@ export function RenderDom<Ids extends string>({ spec, layout, showDebugOverlay }
       {spec.elements.map((element) => {
         const entry = layout.elements[element.id as Ids];
         if (!entry) return null;
+        const nodeProps = { element, entry, selected: element.id === selectedElementId, onSelect: onSelectElement };
         switch (element.type) {
           case 'text':
-            return <TextNode key={element.id} element={element} entry={entry} />;
+            return <TextNode key={element.id} {...nodeProps} />;
           case 'image':
-            return <ImageNode key={element.id} element={element} entry={entry} />;
+            return <ImageNode key={element.id} {...nodeProps} />;
           case 'button':
-            return <ButtonNode key={element.id} element={element} entry={entry} />;
+            return <ButtonNode key={element.id} {...nodeProps} />;
           case 'scan':
-            return <ScanNode key={element.id} element={element} entry={entry} />;
+            return <ScanNode key={element.id} {...nodeProps} />;
         }
       })}
       {showDebugOverlay && <ZoneOverlay layout={layout} />}
