@@ -32,8 +32,23 @@ export interface RungRecord {
 // because Diagnostics needs the type and diagnostics.ts is built first in
 // the file order; validate.ts imports this definition rather than the
 // other way around.
+export type ViolationKind =
+  | 'overlap'
+  | 'out-of-bounds'
+  | 'safe-area'
+  | 'tap-target'
+  | 'text-floor'
+  | 'scan-integrity';
+
+// 'error' means a hard invariant actually broke (overlap, clipping, a
+// floor violated) — these are what §11 throws on in dev. 'warning' is
+// reserved for the one explicitly softer check (§11.3): an element resting
+// in the safe-area margin is worth flagging, not failing.
+export type ViolationSeverity = 'error' | 'warning';
+
 export interface Violation {
-  readonly kind: string;
+  readonly kind: ViolationKind;
+  readonly severity: ViolationSeverity;
   readonly message: string;
   readonly elementIds: readonly string[];
 }

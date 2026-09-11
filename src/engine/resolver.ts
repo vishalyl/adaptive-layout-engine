@@ -1,6 +1,5 @@
-// The resolver: orchestrates Phases 0-6 (Phase 7, the standalone invariant
-// checker in validate.ts, is wired in once that module exists). This file
-// is the single most important one in the engine — see BUILD_SPEC.md §8.
+// The resolver: orchestrates all seven phases. This file is the single most
+// important one in the engine — see BUILD_SPEC.md §8.
 //
 //   Phase 0  Normalise      surface -> usable rect + constraint floors
 //   Phase 1  Classify       derived geometry -> aspect class + scale class
@@ -9,6 +8,7 @@
 //   Phase 4  Partition      template + usable rect -> zones
 //   Phase 5  Allocate       priority-ordered greedy fill, with degradation loop
 //   Phase 6  Position       zone-relative boxes -> absolute rects
+//   Phase 7  Validate       invariants; throws in dev, flags in prod (validate.ts)
 //
 // `resolve()` takes a `TextMeasurer` as a parameter (default: the DOM-free
 // estimator) rather than importing one, which is what keeps it a pure
@@ -20,8 +20,9 @@ import type { Interaction, SurfaceProfile, Viewing } from './surface';
 import { classify, type AspectClass, type Classification, type ScaleClass } from './classify';
 import { getTemplate, selectTemplate, type Template, type TemplateId, type Zone } from './templates';
 import { type DropReason, type Rung, nextRung, selectVictim } from './degradation';
-import { DiagnosticsBuilder, type Diagnostics } from './diagnostics';
+import { DiagnosticsBuilder, type Diagnostics, type Violation } from './diagnostics';
 import { estimateMeasurer, type TextMeasurer } from './measure';
+import { LayoutInvariantError, validateLayout } from './validate';
 import { EPSILON, insetRect, px, type Rect, type Size } from './types';
 
 // ---------------------------------------------------------------------------
@@ -102,8 +103,19 @@ const TAP_HEIGHT_FONT_MULTIPLIER = 2.2; // §8.4: button height floor = max(tapF
 const FONT_FAMILY = 'Archivo, sans-serif'; // passed to the measurer only — the engine never reads a font file
 const MAX_ITERATIONS = 64; // §8.6: bounds the allocation loop so a bug fails loudly instead of hanging
 
+// Order matters here: `Math.max(min, Math.min(n, max))` — not the more
+// common `Math.min(Math.max(n, min), max)` — because every caller in this
+// file uses `min` for a genuine hard floor and `max` for a soft ceiling.
+// When a ceiling is computed independently of its floor (e.g. an element's
+// own 2x-ideal cap on a surface whose text floor is more than double that
+// element's ideal size), `min` can end up greater than `max`. Clamping
+// max-then-min in that case silently returns the too-small ceiling instead
+// of the floor — exactly the bug the fuzz suite (§16.3) caught on its
+// second randomly generated surface. Clamping min-then-max instead means a
+// degenerate range always resolves to the floor, which is the correct
+// answer whenever the two are in conflict: the hard constraint wins.
 function clamp(n: number, min: number, max: number): number {
-  return Math.min(Math.max(n, min), max);
+  return Math.max(min, Math.min(n, max));
 }
 
 function nowMs(): number {
@@ -201,7 +213,10 @@ function computeTextDemand(element: TextElement, surface: NormalisedSurface, mea
   // "comfortable" size is smaller than that floor, its ideal is bumped up
   // to the smallest legally-renderable size rather than starting illegally
   // small. The 2x ceiling just prevents densityScale from inflating text
-  // without bound.
+  // without bound. (`clamp`'s floor-wins-on-conflict semantics, documented
+  // at its definition, are what keep this correct even when that ceiling
+  // is smaller than the floor — e.g. legal text's own 12px ideal capped at
+  // 24px, on a surface whose text floor is 30px.)
   const idealFontPx = clamp(element.idealFontPx * surface.densityScale, floorFontPx, element.idealFontPx * 2);
 
   const idealMeasure = measurer.measure(element.content, idealFontPx, element.weight, FONT_FAMILY, Number.POSITIVE_INFINITY);
@@ -615,6 +630,17 @@ function position(
       mainSizes = measured.map((m) => (zone.flow === 'stack-y' ? m.size.h : m.size.w));
     }
 
+    // Zones tile the usable rect exactly in float precision (splitRect,
+    // §5.1), so zone N's far edge and zone N+1's near edge are the exact
+    // same number before rounding. Flooring each zone's own far edge here,
+    // once, gives every occupant in every zone the same shared, consistent
+    // boundary to clamp against below — which is what guarantees two
+    // occupants in neighbouring zones can only ever touch, never overlap,
+    // regardless of how an individual occupant's own ceil-rounded size
+    // happened to fall relative to its zone's capacity.
+    const zoneFarX = Math.floor(zone.rect.x + zone.rect.w);
+    const zoneFarY = Math.floor(zone.rect.y + zone.rect.h);
+
     const crossSizes = measured.map((m) => (zone.flow === 'stack-y' ? m.size.w : m.size.h));
     const totalMain = mainSizes.reduce((sum, v) => sum + v, 0) + zone.gapPx * Math.max(0, occupants.length - 1);
     const leftoverMain = Math.max(0, capacityMain - totalMain);
@@ -643,11 +669,23 @@ function position(
       // Round once, here, at the very end — floor position and ceil size so
       // rounding only ever shrinks the gap between elements, never creates
       // a new overlap (§8.7).
+      const roundedX = Math.floor(rawRect.x);
+      const roundedY = Math.floor(rawRect.y);
+
+      // ...except that ceiling alone isn't enough on its own: an occupant
+      // whose unrounded size lands a fraction of a pixel under its zone's
+      // capacity still gets ceiled a full pixel past that zone's own
+      // (identically floored) far edge, landing exactly on top of whatever
+      // the next zone placed at that same boundary. Clamping the ceiled
+      // size back down to the zone's floored far edge is what actually
+      // closes that gap — this is the fix for the fuzz suite's "hero"/
+      // "headline" and "headline"/"cta" 1px overlaps, both of which were
+      // this exact boundary-rounding drift, not a sizing bug.
       const rect: Rect = {
-        x: px(Math.floor(rawRect.x)),
-        y: px(Math.floor(rawRect.y)),
-        w: px(Math.ceil(rawRect.w)),
-        h: px(Math.ceil(rawRect.h)),
+        x: px(roundedX),
+        y: px(roundedY),
+        w: px(Math.max(0, Math.min(Math.ceil(rawRect.w), zoneFarX - roundedX))),
+        h: px(Math.max(0, Math.min(Math.ceil(rawRect.h), zoneFarY - roundedY))),
       };
 
       const placed: PlacedElement = {
@@ -685,6 +723,46 @@ export interface ResolveOptions {
   readonly measurer?: TextMeasurer;
 }
 
+// Phase 4's zones tile the usable rect exactly, edge to edge, in float
+// precision — but each zone is a separate object, so rounding two
+// neighbouring zones' boundaries independently (floor this one's far edge,
+// floor the next one's near edge) can lose up to a pixel of the TRUE
+// available room on each side, even though both roundings start from what
+// is mathematically the same float. That combined loss is exactly what
+// produced two different 1px false positives during fuzzing: an occupant
+// clamped against its own zone's independently-floored far edge, clamped
+// below a hard floor it had genuinely already met in the unrounded layout.
+//
+// The fix is to round the zone boundaries ONCE, as a set, immediately
+// after partitioning — before any demand, allocation, or positioning math
+// touches them — using a running integer cursor along the template's main
+// axis: each zone's rounded far edge becomes the next zone's rounded near
+// edge, by construction, so two zones can never disagree about where their
+// shared boundary sits. Every template's `partition` produces zones that
+// are all sequential along a single axis (§9), which is what makes this
+// one straightforward pass correct for all five of them; the cross axis
+// has no neighbours to reconcile with, so it only needs its own two edges
+// floored once.
+function snapZonesToPixelGrid(zones: readonly Zone[], mainAxis: 'x' | 'y', usable: Rect): Zone[] {
+  const crossStart = Math.floor(mainAxis === 'x' ? usable.y : usable.x);
+  const crossFar = Math.floor(mainAxis === 'x' ? usable.y + usable.h : usable.x + usable.w);
+  const crossSize = Math.max(0, crossFar - crossStart);
+
+  let mainCursor = Math.floor(mainAxis === 'x' ? usable.x : usable.y);
+
+  return zones.map((zone) => {
+    const rawFar = mainAxis === 'x' ? zone.rect.x + zone.rect.w : zone.rect.y + zone.rect.h;
+    const roundedFar = Math.round(rawFar);
+    const mainSize = Math.max(0, roundedFar - mainCursor);
+    const rect: Rect =
+      mainAxis === 'x'
+        ? { x: px(mainCursor), y: px(crossStart), w: px(mainSize), h: px(crossSize) }
+        : { x: px(crossStart), y: px(mainCursor), w: px(crossSize), h: px(mainSize) };
+    mainCursor = roundedFar;
+    return { ...zone, rect };
+  });
+}
+
 function describeClassification(c: Classification): string {
   return (
     `aspect ${c.aspect.toFixed(2)} -> '${c.aspectClass}'; ` +
@@ -718,10 +796,11 @@ export function resolve<S extends AdSpec>(
   diagnostics.note('select', `template '${templateId}' selected for aspect class '${classification.aspectClass}'`);
 
   // Phase 4 (zones depend only on the template + usable rect, not on demand)
-  const zones = template.partition(surface.usable, {
+  const rawZones = template.partition(surface.usable, {
     aspectClass: classification.aspectClass,
     scaleClass: classification.scaleClass,
   });
+  const zones = snapZonesToPixelGrid(rawZones, template.mainAxis, surface.usable);
   diagnostics.note('partition', `${zones.length} zone(s): ${zones.map((z) => z.id).join(', ')}`);
 
   // Phase 3 — compute demand only for elements this template is even
@@ -765,7 +844,38 @@ export function resolve<S extends AdSpec>(
   const { elements, resolvedZones } = position(states, excluded, zones, template, surface, measurer, constrained);
 
   const anyDegraded = states.some((s) => s.appliedRungs.length > 0);
-  const status: ResolvedLayout['status'] = constrained ? 'constrained' : anyDegraded ? 'degraded' : 'ok';
+  let status: ResolvedLayout['status'] = constrained ? 'constrained' : anyDegraded ? 'degraded' : 'ok';
+
+  // Phase 7 — the standalone invariant checker (validate.ts). This runs on
+  // every resolve, not just in tests: it is a second, independent pass over
+  // the FINAL geometry, catching anything the allocation loop's own
+  // bookkeeping might have missed rather than trusting that bookkeeping to
+  // have been correct.
+  const violations = validateLayout(spec, { elements, surface });
+  const errorViolations = violations.filter((v) => v.severity === 'error');
+
+  // A tap-target, text, or scan-integrity floor can end up violated by a
+  // genuinely impossible surface through more than one path: the §10.5
+  // forced-fit fallback (fitToZoneByForce, above) after the main-axis
+  // ladder is exhausted, OR — as the fuzz suite (§16.3) found — a surface
+  // whose usable rect is simply narrower on the CROSS axis than a fixed
+  // element's own tap floor, which `allocate()`'s own overflow bookkeeping
+  // never sees (clampCrossAxis resizes silently; it doesn't register as a
+  // ladder-triggering overflow). Rather than special-case every path that
+  // can produce this, any floor violation is treated as the same
+  // documented, acceptable compromise of an impossible surface. Overlap
+  // and out-of-bounds are a different matter: §10.5 is explicit that
+  // clipping is "never acceptable," so those two kinds always count as
+  // unexpected regardless of how the surface got here.
+  const isDocumentedFloorCompromise = (v: Violation) => v.kind !== 'overlap' && v.kind !== 'out-of-bounds';
+  const unexpectedViolations = errorViolations.filter((v) => !isDocumentedFloorCompromise(v));
+
+  if (errorViolations.length > 0) {
+    status = 'constrained';
+  }
+  if (unexpectedViolations.length > 0 && import.meta.env.DEV) {
+    throw new LayoutInvariantError(unexpectedViolations);
+  }
 
   const resolveMs = nowMs() - start;
   const diag = diagnostics.build(
@@ -777,9 +887,7 @@ export function resolve<S extends AdSpec>(
     },
     iterations,
     resolveMs,
-    // Phase 7's invariant checker (validate.ts) is wired in once that
-    // module exists; until then this is honestly empty rather than faked.
-    [],
+    violations,
   );
 
   return {
