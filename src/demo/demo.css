@@ -65,6 +65,20 @@ body {
   min-width: 0;
 }
 
+/* Keeps the resolution summary / inspector / diagnostics in view while the
+   left column's much longer custom-surface controls scroll underneath it,
+   instead of ending a third of the way down the page and leaving a large
+   flat gap below. Skipped on narrow viewports, where the layout collapses
+   to a single column and "stays in view while scrolling" stops making
+   sense. */
+@media (min-width: 961px) {
+  .demo-column-sticky {
+    position: sticky;
+    top: 32px;
+    align-self: start;
+  }
+}
+
 .demo-picker {
   display: flex;
   flex-wrap: wrap;
@@ -110,7 +124,11 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  min-height: 480px;
+  /* Just enough to avoid a jarring collapse before the first surface
+     resolves — NOT a fixed height every surface gets forced into. A short
+     wide banner and a tall narrow panel both size to their own content
+     now, instead of floating in a one-size-fits-all box. */
+  min-height: 220px;
 }
 
 .demo-stage-viewport {
@@ -152,6 +170,11 @@ body {
   font-size: 13px;
   font-weight: 600;
   margin: 0 0 12px;
+}
+
+.demo-panel-subtitle {
+  font-size: 11px;
+  margin: -8px 0 14px;
 }
 
 .demo-status-row {

@@ -118,6 +118,9 @@ export default function App() {
           </div>
 
           <CustomSurfacePanel
+            activeProfile={activeProfile}
+            syncKey={selection.kind === 'shipped' ? selection.key : 'custom'}
+            activeLabel={activeLabel}
             onResolve={(profile) => {
               setCustomProfile(profile);
               setSelection({ kind: 'custom' });
@@ -125,7 +128,7 @@ export default function App() {
           />
         </div>
 
-        <div className="demo-column">
+        <div className="demo-column demo-column-sticky">
           <section className="demo-side-panel">
             <h2>Resolution summary</h2>
             <div className="demo-status-row">

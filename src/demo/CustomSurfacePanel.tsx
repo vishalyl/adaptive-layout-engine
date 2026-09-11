@@ -10,7 +10,7 @@
 // its error message inline rather than crashing the stage; the last valid
 // profile stays active until the draft is valid again.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { classify } from '../engine/classify';
 import { selectTemplate } from '../engine/templates';
 import {
@@ -94,13 +94,37 @@ function profileToDraft(p: SurfaceProfile): Draft {
 
 export interface CustomSurfacePanelProps {
   readonly onResolve: (profile: SurfaceProfile) => void;
+  // Whatever is currently on stage — a shipped surface's profile, or this
+  // panel's own last-committed one. Together with `syncKey` these are what
+  // keep this panel's numbers from silently disagreeing with the rest of
+  // the page (see the "sync" effect below).
+  readonly activeProfile: SurfaceProfile;
+  // The shipped surface's `key` while one is selected, or the literal
+  // string 'custom' once this panel itself is the source of truth. A plain
+  // string rather than a boolean because the effect needs to fire again
+  // every time the user picks a *different* shipped surface, not just on
+  // the shipped/custom transition.
+  readonly syncKey: string;
+  readonly activeLabel: string;
 }
 
-export function CustomSurfacePanel({ onResolve }: CustomSurfacePanelProps) {
+export function CustomSurfacePanel({ onResolve, activeProfile, syncKey, activeLabel }: CustomSurfacePanelProps) {
   const [draft, setDraft] = useState<Draft>(DEFAULT_DRAFT);
   const [jsonText, setJsonText] = useState('');
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
+
+  // Without this, picking a different chip in the surface picker updates
+  // the stage but leaves this panel silently describing whatever it last
+  // happened to hold — e.g. the "Retail kiosk" stage next to a "720x720"
+  // custom-panel preview that was never touched. Mirroring the active
+  // profile here (display only — `setDraft`, not `commit`) keeps every
+  // number on the page describing the same surface, and stops the moment
+  // the user actually starts editing (`syncKey` becomes 'custom').
+  useEffect(() => {
+    if (syncKey !== 'custom') setDraft(profileToDraft(activeProfile));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncKey]);
 
   function commit(next: Draft) {
     setDraft(next);
@@ -155,6 +179,9 @@ export function CustomSurfacePanel({ onResolve }: CustomSurfacePanelProps) {
   return (
     <section className="demo-side-panel">
       <h2>Custom surface</h2>
+      <p className="demo-text-muted demo-panel-subtitle">
+        {syncKey === 'custom' ? 'Editing a custom surface' : `Showing: ${activeLabel} — drag any control to customize`}
+      </p>
 
       <div className="demo-preset-row">
         {PRESETS.map((preset) => (
@@ -321,7 +348,7 @@ export function CustomSurfacePanel({ onResolve }: CustomSurfacePanelProps) {
         <legend>Paste a surface profile (JSON)</legend>
         <textarea
           className="demo-json-box"
-          rows={5}
+          rows={7}
           placeholder={'{\n  "widthPx": 500,\n  "heightPx": 500,\n  "safeArea": { "top": 0, "right": 0, "bottom": 0, "left": 0 },\n  "interaction": { "mode": "touch", "minTapTargetPx": 44 },\n  "viewing": { "distance": "near" }\n}'}
           value={jsonText}
           onChange={(e) => setJsonText(e.target.value)}
