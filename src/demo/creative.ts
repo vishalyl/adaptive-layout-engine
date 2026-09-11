@@ -32,13 +32,15 @@ const heroSvg = `
   </svg>
 `;
 
-// A simple monogram mark, square (intrinsicAspect 1).
+// A simple monogram mark, square (intrinsicAspect 1). Filled with seaglass
+// rather than marine: the demo's ad background is marine (§6.3's "ad
+// background on dark surfaces"), so a marine-on-marine mark would vanish.
 const logoSvg = `
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-    <rect width="64" height="64" rx="14" fill="${KEEL_MARINE}" />
+    <rect width="64" height="64" rx="14" fill="${KEEL_SEAGLASS}" />
     <path
       d="M20 14 L20 50 M20 32 L38 14 M20 32 L40 50"
-      stroke="${KEEL_SAND}"
+      stroke="${KEEL_MARINE}"
       stroke-width="6"
       stroke-linecap="round"
       stroke-linejoin="round"

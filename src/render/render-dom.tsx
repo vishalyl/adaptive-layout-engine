@@ -10,9 +10,26 @@
 // surface, so resolve() doesn't carry them — only where things go).
 
 import type { CSSProperties } from 'react';
-import type { AdElement, AdSpec } from '../engine/spec';
+import type { AdElement, AdSpec, Role } from '../engine/spec';
 import type { LayoutEntry, ResolvedLayout } from '../engine/resolver';
 import type { Rect } from '../engine/types';
+
+// The KEEL brand tokens from BUILD_SPEC.md §6.3. Duplicated here rather
+// than imported from src/demo/creative.ts — this renderer must import
+// nothing from demo/ (§13.1), the same independence render-canvas.ts is
+// held to, so each backend carries its own tiny copy of the palette rather
+// than sharing one through a path this component isn't allowed to take.
+const KEEL_MARINE = '#0E2A38';
+const KEEL_SEAGLASS = '#86B8A9';
+const KEEL_SAND = '#EDE3D0';
+const KEEL_SIGNAL = '#F2B705';
+
+// Signal yellow is spent in exactly one place (the CTA); everything else
+// reads off the sand/marine pair, with the badge picking up the seaglass
+// accent instead of competing for the same attention.
+function textColorForRole(role: Role): string {
+  return role === 'legal' ? 'rgba(237, 227, 208, 0.7)' : KEEL_SAND;
+}
 
 export interface RenderDomProps<Ids extends string> {
   readonly spec: AdSpec<readonly AdElement<Ids>[]>;
@@ -61,6 +78,12 @@ function TextNode({ element, entry, selected, onSelect }: NodeProps) {
   if (!entry.placed || element.type !== 'text') return null;
   const typography = entry.typography;
   const interaction = interactionProps(element, selected, onSelect);
+  // The badge (role 'incentive') is the one text element styled as a
+  // filled chip rather than bare type — background-color and radius never
+  // change the box's outer size, so this stays purely decorative: the
+  // resolver's rect, and therefore the measurer's width assumption, is
+  // untouched.
+  const isBadge = element.role === 'incentive';
   return (
     <div
       onClick={interaction.onClick}
@@ -71,6 +94,10 @@ function TextNode({ element, entry, selected, onSelect }: NodeProps) {
         lineHeight: 1.25,
         fontWeight: element.weight,
         letterSpacing: element.tracking !== undefined ? `${element.tracking}px` : undefined,
+        color: isBadge ? KEEL_MARINE : textColorForRole(element.role),
+        background: isBadge ? KEEL_SEAGLASS : undefined,
+        borderRadius: isBadge ? 4 : undefined,
+        textAlign: isBadge ? 'center' : undefined,
         overflow: 'hidden',
         display: '-webkit-box',
         WebkitBoxOrient: 'vertical',
@@ -119,6 +146,10 @@ function ButtonNode({ element, entry, selected, onSelect }: NodeProps) {
         fontSize: typography?.fontPx ?? element.idealFontPx,
         fontWeight: 700,
         whiteSpace: 'nowrap',
+        // Signal yellow, spent exactly once (§6.3) — this is that one place.
+        background: KEEL_SIGNAL,
+        color: KEEL_MARINE,
+        borderRadius: 4,
       }}
       data-element-id={element.id}
       data-role={element.role}
@@ -236,6 +267,7 @@ export function RenderDom<Ids extends string>({
         width: layout.surface.full.w,
         height: layout.surface.full.h,
         overflow: 'hidden',
+        background: KEEL_MARINE,
       }}
     >
       {spec.elements.map((element) => {
