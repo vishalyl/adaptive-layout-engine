@@ -1,0 +1,216 @@
+// ResolvedLayout -> React/DOM. This is the ONLY renderer allowed to make
+// layout decisions of its own — and it doesn't: every `left/top/width/height`
+// below is copied verbatim, in px, from `entry.rect`. Zero `@media` queries,
+// zero flexbox/grid deciding size or position. Flexbox appears exactly once,
+// to centre a button label *inside* its own already-sized box — that is
+// trivial self-centring, not a layout decision, and is called out below.
+//
+// The renderer needs two inputs: `layout` for geometry (from resolve()) and
+// `spec` for content (text/image src/label/payload never change with the
+// surface, so resolve() doesn't carry them — only where things go).
+
+import type { CSSProperties } from 'react';
+import type { AdElement, AdSpec } from '../engine/spec';
+import type { LayoutEntry, ResolvedLayout } from '../engine/resolver';
+import type { Rect } from '../engine/types';
+
+export interface RenderDomProps<Ids extends string> {
+  readonly spec: AdSpec<readonly AdElement<Ids>[]>;
+  readonly layout: ResolvedLayout<Ids>;
+  // Draws zone boundaries and per-element id/priority labels — cheap to
+  // build, and it makes the algorithm visible to anyone skimming the demo.
+  readonly showDebugOverlay?: boolean;
+}
+
+const rectStyle = (rect: Rect): CSSProperties => ({
+  position: 'absolute',
+  left: rect.x,
+  top: rect.y,
+  width: rect.w,
+  height: rect.h,
+  boxSizing: 'border-box',
+});
+
+function TextNode({ element, entry }: { element: AdElement; entry: LayoutEntry }) {
+  if (!entry.placed || element.type !== 'text') return null;
+  const typography = entry.typography;
+  return (
+    <div
+      style={{
+        ...rectStyle(entry.rect),
+        fontSize: typography?.fontPx ?? element.idealFontPx,
+        lineHeight: 1.25,
+        fontWeight: element.weight,
+        letterSpacing: element.tracking !== undefined ? `${element.tracking}px` : undefined,
+        overflow: 'hidden',
+        display: '-webkit-box',
+        WebkitBoxOrient: 'vertical',
+        WebkitLineClamp: typography?.lines ?? element.maxLines,
+        textOverflow: typography?.truncated ? 'ellipsis' : 'clip',
+      }}
+      data-element-id={element.id}
+      data-role={element.role}
+    >
+      {element.content}
+    </div>
+  );
+}
+
+function ImageNode({ element, entry }: { element: AdElement; entry: LayoutEntry }) {
+  if (!entry.placed || element.type !== 'image') return null;
+  return (
+    <img
+      src={element.src}
+      alt=""
+      style={{ ...rectStyle(entry.rect), objectFit: element.fit }}
+      data-element-id={element.id}
+      data-role={element.role}
+    />
+  );
+}
+
+function ButtonNode({ element, entry }: { element: AdElement; entry: LayoutEntry }) {
+  if (!entry.placed || element.type !== 'button') return null;
+  const typography = entry.typography;
+  return (
+    <div
+      style={{
+        ...rectStyle(entry.rect),
+        // The one legitimate use of flexbox in the ad render path: centring
+        // a label inside a box whose size was already fully decided by the
+        // resolver. Flexbox renders the decision here; it does not make one.
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: typography?.fontPx ?? element.idealFontPx,
+        fontWeight: 700,
+        whiteSpace: 'nowrap',
+      }}
+      data-element-id={element.id}
+      data-role={element.role}
+    >
+      {element.label}
+    </div>
+  );
+}
+
+// There is no QR-generation library in this build — the payload is real,
+// the rendered mark is a deliberately simple placeholder grid standing in
+// for one, sized exactly at the resolver's computed rect. Swapping in a
+// real QR renderer later would not touch layout at all: this component
+// only ever reads `entry.rect`.
+function ScanNode({ element, entry }: { element: AdElement; entry: LayoutEntry }) {
+  if (!entry.placed || element.type !== 'scan') return null;
+  // A percentage `padding` here would resolve against the containing
+  // block's width (the whole ad surface), not this element's own small
+  // box, since padding percentages on an absolutely-positioned element are
+  // defined relative to the containing block — not the box itself. That
+  // quietly zeroed out the grid entirely on anything but a near-full-width
+  // element. Computing the padding in px from the element's own rect avoids
+  // the trap.
+  const pad = Math.round(Math.min(entry.rect.w, entry.rect.h) * 0.08);
+  return (
+    <div
+      style={{
+        ...rectStyle(entry.rect),
+        display: 'grid',
+        gridTemplateColumns: 'repeat(7, 1fr)',
+        gridTemplateRows: 'repeat(7, 1fr)',
+        padding: pad,
+        background: '#fff',
+      }}
+      data-element-id={element.id}
+      data-role={element.role}
+      title={element.payload}
+    >
+      {Array.from({ length: 49 }, (_, i) => (
+        <div key={i} style={{ background: i % 3 === 0 || i % 5 === 0 ? '#0E2A38' : 'transparent' }} />
+      ))}
+    </div>
+  );
+}
+
+function ZoneOverlay({ layout }: { layout: ResolvedLayout }) {
+  return (
+    <>
+      {layout.zones.map((zone) => (
+        <div
+          key={zone.id}
+          style={{
+            position: 'absolute',
+            left: zone.rect.x,
+            top: zone.rect.y,
+            width: zone.rect.w,
+            height: zone.rect.h,
+            border: '1px dashed rgba(255,0,128,0.6)',
+            pointerEvents: 'none',
+          }}
+        >
+          <span style={{ position: 'absolute', top: 2, left: 2, fontSize: 9, color: 'rgba(255,0,128,0.9)', fontFamily: 'monospace' }}>
+            {zone.id}
+          </span>
+        </div>
+      ))}
+    </>
+  );
+}
+
+function ElementOverlay({ elements }: { elements: Readonly<Record<string, LayoutEntry>> }) {
+  return (
+    <>
+      {Object.values(elements).map((entry) =>
+        entry.placed ? (
+          <div
+            key={entry.id}
+            style={{ ...rectStyle(entry.rect), border: '1px solid rgba(0,140,255,0.7)', pointerEvents: 'none' }}
+          >
+            <span
+              style={{
+                position: 'absolute',
+                bottom: 2,
+                right: 2,
+                fontSize: 9,
+                color: '#fff',
+                background: 'rgba(0,140,255,0.85)',
+                padding: '1px 3px',
+                fontFamily: 'monospace',
+              }}
+            >
+              {entry.id}·{entry.role}
+            </span>
+          </div>
+        ) : null,
+      )}
+    </>
+  );
+}
+
+export function RenderDom<Ids extends string>({ spec, layout, showDebugOverlay }: RenderDomProps<Ids>) {
+  return (
+    <div
+      style={{
+        position: 'relative',
+        width: layout.surface.full.w,
+        height: layout.surface.full.h,
+        overflow: 'hidden',
+      }}
+    >
+      {spec.elements.map((element) => {
+        const entry = layout.elements[element.id as Ids];
+        if (!entry) return null;
+        switch (element.type) {
+          case 'text':
+            return <TextNode key={element.id} element={element} entry={entry} />;
+          case 'image':
+            return <ImageNode key={element.id} element={element} entry={entry} />;
+          case 'button':
+            return <ButtonNode key={element.id} element={element} entry={entry} />;
+          case 'scan':
+            return <ScanNode key={element.id} element={element} entry={entry} />;
+        }
+      })}
+      {showDebugOverlay && <ZoneOverlay layout={layout} />}
+      {showDebugOverlay && <ElementOverlay elements={layout.elements} />}
+    </div>
+  );
+}
