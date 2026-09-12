@@ -4,6 +4,7 @@
 
 import type { AdElement, AdSpec } from '../engine/spec';
 import type { ResolvedLayout } from '../engine/resolver';
+import { InfoTooltip } from './InfoTooltip';
 
 export interface ElementInspectorProps {
   readonly spec: AdSpec;
@@ -11,12 +12,23 @@ export interface ElementInspectorProps {
   readonly selectedId: string | null;
 }
 
+const HEADING_TOOLTIP =
+  'Click any element in the ad to see its priority, degradability, final size/position, and which degradation rungs were applied to it.';
+
 export function ElementInspector({ spec, layout, selectedId }: ElementInspectorProps) {
   if (!selectedId) {
     return (
-      <section className="demo-side-panel">
-        <h2>Element inspector</h2>
-        <p className="demo-text-muted">Click any element on the stage to inspect it.</p>
+      <section className="panel panel-readout">
+        <div className="panel-head">
+          <h2>
+            Element inspector
+            <InfoTooltip text={HEADING_TOOLTIP} />
+          </h2>
+        </div>
+        <div className="empty">
+          <p className="empty-title">Nothing selected</p>
+          <p className="empty-hint">Click any element on the stage to see why the resolver put it there.</p>
+        </div>
       </section>
     );
   }
@@ -26,47 +38,52 @@ export function ElementInspector({ spec, layout, selectedId }: ElementInspectorP
   if (!element || !entry) return null;
 
   return (
-    <section className="demo-side-panel">
-      <h2>Element inspector</h2>
-      <dl className="demo-kv">
+    <section className="panel panel-readout">
+      <div className="panel-head">
+        <h2>
+          Element inspector
+          <InfoTooltip text={HEADING_TOOLTIP} />
+        </h2>
+      </div>
+      <dl className="kv">
         <dt>id</dt>
-        <dd>{element.id}</dd>
+        <dd className="mono">{element.id}</dd>
         <dt>type</dt>
-        <dd>{element.type}</dd>
+        <dd className="mono">{element.type}</dd>
         <dt>role</dt>
-        <dd>{element.role}</dd>
+        <dd className="mono">{element.role}</dd>
         <dt>priority</dt>
-        <dd>{element.priority}</dd>
+        <dd className="mono">{element.priority}</dd>
         <dt>degradability</dt>
-        <dd>{element.degradability}</dd>
+        <dd className="mono">{element.degradability}</dd>
         <dt>placed</dt>
-        <dd>{entry.placed ? 'yes' : 'no'}</dd>
+        <dd className="mono">{entry.placed ? 'yes' : 'no'}</dd>
         {entry.placed ? (
           <>
             <dt>zone</dt>
-            <dd>{entry.zone}</dd>
+            <dd className="mono">{entry.zone}</dd>
             <dt>rect</dt>
-            <dd>
+            <dd className="mono">
               {entry.rect.w}×{entry.rect.h} @ ({entry.rect.x}, {entry.rect.y})
             </dd>
             {entry.typography && (
               <>
                 <dt>font size</dt>
-                <dd>{entry.typography.fontPx.toFixed(1)}px</dd>
+                <dd className="mono">{entry.typography.fontPx.toFixed(1)}<em>px</em></dd>
                 <dt>lines</dt>
-                <dd>
+                <dd className="mono">
                   {entry.typography.lines}
                   {entry.typography.truncated ? ' (truncated)' : ''}
                 </dd>
               </>
             )}
             <dt>rungs applied</dt>
-            <dd>{entry.appliedRungs.length > 0 ? entry.appliedRungs.join(' -> ') : 'none'}</dd>
+            <dd className="mono">{entry.appliedRungs.length > 0 ? entry.appliedRungs.join(' -> ') : 'none'}</dd>
           </>
         ) : (
           <>
             <dt>reason</dt>
-            <dd>{entry.reason}</dd>
+            <dd className="mono">{entry.reason}</dd>
           </>
         )}
       </dl>

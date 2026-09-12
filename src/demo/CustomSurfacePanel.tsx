@@ -21,6 +21,7 @@ import {
   type Viewing,
 } from '../engine/surface';
 import { insetRect, px, type Rect } from '../engine/types';
+import { InfoTooltip } from './InfoTooltip';
 
 export interface Draft {
   readonly widthPx: number;
@@ -35,6 +36,7 @@ export interface Draft {
   readonly minTextPx: number;
 }
 
+// eslint-disable-next-line react/only-export-components
 export const DEFAULT_DRAFT: Draft = {
   widthPx: 720,
   heightPx: 720,
@@ -55,6 +57,15 @@ const PRESETS: readonly { label: string; widthPx: number; heightPx: number }[] =
   { label: 'Micro', widthPx: 160, heightPx: 160 },
 ];
 
+// The filled portion of a custom range track can't be derived in pure CSS
+// (there is no `attr()` in gradients), so the component computes it once
+// per render and hands it to the stylesheet as a percentage. Chrome/Safari
+// read `--fill` from the runnable-track gradient; Firefox uses its native
+// ::-moz-range-progress and ignores it. Presentation only.
+function fillPct(value: number, min: number, max: number): string {
+  return `${((value - min) / (max - min)) * 100}%`;
+}
+
 function draftToProfile(d: Draft): SurfaceProfile {
   const interaction: Interaction =
     d.mode === 'passive' ? { mode: 'passive' } : { mode: d.mode, minTapTargetPx: d.minTapTargetPx };
@@ -70,6 +81,7 @@ function draftToProfile(d: Draft): SurfaceProfile {
 
 // Exported so App.tsx has a real, valid SurfaceProfile to resolve against
 // before the user has touched a single control.
+// eslint-disable-next-line react/only-export-components
 export const DEFAULT_CUSTOM_PROFILE: SurfaceProfile = draftToProfile(DEFAULT_DRAFT);
 
 // The reverse direction, used when a pasted JSON profile (or a preset)
@@ -177,58 +189,77 @@ export function CustomSurfacePanel({ onResolve, activeProfile, syncKey, activeLa
   }
 
   return (
-    <section className="demo-side-panel">
-      <h2>Custom surface</h2>
-      <p className="demo-text-muted demo-panel-subtitle">
+    <section className="panel panel-control">
+      <div className="panel-head">
+        <h2>Custom surface</h2>
+      </div>
+      <p className="panel-sub">
         {syncKey === 'custom' ? 'Editing a custom surface' : `Showing: ${activeLabel} — drag any control to customize`}
       </p>
 
-      <div className="demo-preset-row">
+      <div className="picker picker-tight">
         {PRESETS.map((preset) => (
           <button
             key={preset.label}
             type="button"
-            className="demo-preset-chip"
+            className="chip chip-preset"
             onClick={() => commit({ ...draft, widthPx: preset.widthPx, heightPx: preset.heightPx })}
           >
             {preset.label}
-            <span className="demo-chip-dims">
-              {preset.widthPx} × {preset.heightPx}
+            <span className="chip-dims mono">
+              {preset.widthPx} &times; {preset.heightPx}
             </span>
           </button>
         ))}
       </div>
 
-      <label className="demo-field">
-        <span>
-          Width <b>{Math.round(draft.widthPx)}px</b>
+      <label className="field">
+        <span className="field-head">
+          <span className="field-label">
+            Width
+            <InfoTooltip text="The surface's true pixel dimensions. The stage always renders at real size — it's only ever scaled down visually to fit the preview box." />
+          </span>
+          <b className="field-value mono">{Math.round(draft.widthPx)}<em>px</em></b>
         </span>
         <input
+          className="range"
           type="range"
           min={120}
           max={2400}
           value={draft.widthPx}
+          aria-label="Width"
+          style={{ ['--fill' as string]: fillPct(draft.widthPx, 120, 2400) }}
           onChange={(e) => commit({ ...draft, widthPx: Number(e.target.value) })}
         />
       </label>
 
-      <label className="demo-field">
-        <span>
-          Height <b>{Math.round(draft.heightPx)}px</b>
+      <label className="field">
+        <span className="field-head">
+          <span className="field-label">
+            Height
+            <InfoTooltip text="The surface's true pixel dimensions. The stage always renders at real size — it's only ever scaled down visually to fit the preview box." />
+          </span>
+          <b className="field-value mono">{Math.round(draft.heightPx)}<em>px</em></b>
         </span>
         <input
+          className="range"
           type="range"
           min={80}
           max={2400}
           value={draft.heightPx}
+          aria-label="Height"
+          style={{ ['--fill' as string]: fillPct(draft.heightPx, 80, 2400) }}
           onChange={(e) => commit({ ...draft, heightPx: Number(e.target.value) })}
         />
       </label>
 
-      <fieldset className="demo-fieldset">
-        <legend>Safe area (px)</legend>
-        <div className="demo-safe-area-grid">
-          <label>
+      <fieldset className="fieldset">
+        <legend>
+          Safe area (px)
+          <InfoTooltip text="Margins the ad must stay clear of. Subtracted from the surface before any layout decision is made." />
+        </legend>
+        <div className="grid-2">
+          <label className="num-field">
             Top
             <input
               type="number"
@@ -237,7 +268,7 @@ export function CustomSurfacePanel({ onResolve, activeProfile, syncKey, activeLa
               onChange={(e) => commit({ ...draft, safeTop: Number(e.target.value) })}
             />
           </label>
-          <label>
+          <label className="num-field">
             Right
             <input
               type="number"
@@ -246,7 +277,7 @@ export function CustomSurfacePanel({ onResolve, activeProfile, syncKey, activeLa
               onChange={(e) => commit({ ...draft, safeRight: Number(e.target.value) })}
             />
           </label>
-          <label>
+          <label className="num-field">
             Bottom
             <input
               type="number"
@@ -255,7 +286,7 @@ export function CustomSurfacePanel({ onResolve, activeProfile, syncKey, activeLa
               onChange={(e) => commit({ ...draft, safeBottom: Number(e.target.value) })}
             />
           </label>
-          <label>
+          <label className="num-field">
             Left
             <input
               type="number"
@@ -267,96 +298,117 @@ export function CustomSurfacePanel({ onResolve, activeProfile, syncKey, activeLa
         </div>
       </fieldset>
 
-      <fieldset className="demo-fieldset">
-        <legend>Interaction</legend>
-        <div className="demo-radio-row">
+      <fieldset className="fieldset">
+        <legend>
+          Interaction
+          <InfoTooltip text="touch/pointer carry a minimum tap-target size the CTA must meet. passive (e.g. an unattended screen) has no tap floor at all — nothing can be tapped." />
+        </legend>
+        <div className="radio-row">
           {(['touch', 'pointer', 'passive'] as const).map((mode) => (
-            <label key={mode} className="demo-radio">
-              <input
-                type="radio"
-                name="mode"
-                checked={draft.mode === mode}
-                onChange={() => commit({ ...draft, mode })}
-              />
-              {mode}
+            <label key={mode} className="radio-pill">
+              <input type="radio" name="mode" checked={draft.mode === mode} onChange={() => commit({ ...draft, mode })} />
+              <span>{mode}</span>
             </label>
           ))}
         </div>
         {draft.mode !== 'passive' && (
-          <label className="demo-field">
-            <span>
-              Min tap target <b>{Math.round(draft.minTapTargetPx)}px</b>
+          <label className="field">
+            <span className="field-head">
+              <span className="field-label">
+                Min tap target
+                <InfoTooltip text="The smallest a tappable element (button, QR) is allowed to be, on both axes." />
+              </span>
+              <b className="field-value mono">{Math.round(draft.minTapTargetPx)}<em>px</em></b>
             </span>
             <input
+              className="range"
               type="range"
               min={16}
               max={96}
               value={draft.minTapTargetPx}
+              aria-label="Min tap target"
+              style={{ ['--fill' as string]: fillPct(draft.minTapTargetPx, 16, 96) }}
               onChange={(e) => commit({ ...draft, minTapTargetPx: Number(e.target.value) })}
             />
           </label>
         )}
       </fieldset>
 
-      <fieldset className="demo-fieldset">
-        <legend>Viewing distance</legend>
-        <div className="demo-radio-row">
+      <fieldset className="fieldset">
+        <legend>
+          Viewing distance
+          <InfoTooltip text="near has no legibility floor. mid/far set a minimum font size, since text has to be readable from further away." />
+        </legend>
+        <div className="radio-row">
           {(['near', 'mid', 'far'] as const).map((distance) => (
-            <label key={distance} className="demo-radio">
+            <label key={distance} className="radio-pill">
               <input
                 type="radio"
                 name="distance"
                 checked={draft.distance === distance}
                 onChange={() => commit({ ...draft, distance })}
               />
-              {distance}
+              <span>{distance}</span>
             </label>
           ))}
         </div>
         {draft.distance !== 'near' && (
-          <label className="demo-field">
-            <span>
-              Min text size <b>{Math.round(draft.minTextPx)}px</b>
+          <label className="field">
+            <span className="field-head">
+              <span className="field-label">
+                Min text size
+                <InfoTooltip text="The hard floor no text element's rendered font size may go below on this surface." />
+              </span>
+              <b className="field-value mono">{Math.round(draft.minTextPx)}<em>px</em></b>
             </span>
             <input
+              className="range"
               type="range"
               min={10}
               max={60}
               value={draft.minTextPx}
+              aria-label="Min text size"
+              style={{ ['--fill' as string]: fillPct(draft.minTextPx, 10, 60) }}
               onChange={(e) => commit({ ...draft, minTextPx: Number(e.target.value) })}
             />
           </label>
         )}
       </fieldset>
 
-      {profileError && <p className="demo-error">{profileError}</p>}
+      {profileError && <p className="alert-error">{profileError}</p>}
 
       {preview && (
-        <dl className="demo-kv">
+        <dl className="kv">
           <dt>Aspect</dt>
-          <dd>{preview.aspect.toFixed(2)}</dd>
+          <dd className="mono">{preview.aspect.toFixed(2)}</dd>
           <dt>Aspect class</dt>
-          <dd>{preview.aspectClass}</dd>
+          <dd className="mono">{preview.aspectClass}</dd>
           <dt>Scale class</dt>
-          <dd>{preview.scaleClass}</dd>
-          <dt>Template</dt>
-          <dd>{preview.templateId}</dd>
+          <dd className="mono">{preview.scaleClass}</dd>
+          <dt>
+            Template
+            <InfoTooltip text="The engine's own classification of your current draft — the same computation the resolver itself uses." />
+          </dt>
+          <dd className="mono">{preview.templateId}</dd>
         </dl>
       )}
 
-      <fieldset className="demo-fieldset">
-        <legend>Paste a surface profile (JSON)</legend>
+      <fieldset className="fieldset">
+        <legend>
+          Paste a surface profile (JSON)
+          <InfoTooltip text="Paste a raw surface profile and it's validated and resolved live." />
+        </legend>
         <textarea
-          className="demo-json-box"
+          className="code-box"
           rows={7}
           placeholder={'{\n  "widthPx": 500,\n  "heightPx": 500,\n  "safeArea": { "top": 0, "right": 0, "bottom": 0, "left": 0 },\n  "interaction": { "mode": "touch", "minTapTargetPx": 44 },\n  "viewing": { "distance": "near" }\n}'}
           value={jsonText}
           onChange={(e) => setJsonText(e.target.value)}
         />
-        <button type="button" className="demo-button" onClick={applyJson}>
-          Apply JSON
+        <button type="button" className="btn btn-secondary btn-sm" onClick={applyJson}>
+          <span className="btn-icon-inline" /> Apply JSON
         </button>
-        {jsonError && <p className="demo-error">{jsonError}</p>}
+        {jsonError && <p className="alert-error">{jsonError}</p>}
       </fieldset>
     </section>
   );

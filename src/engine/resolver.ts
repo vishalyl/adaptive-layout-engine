@@ -22,6 +22,7 @@ import { getTemplate, selectTemplate, type Template, type TemplateId, type Zone 
 import { type DropReason, type Rung, nextRung, selectVictim } from './degradation';
 import { DiagnosticsBuilder, type Diagnostics, type Violation } from './diagnostics';
 import { estimateMeasurer, type TextMeasurer } from './measure';
+import { TEXT_WIDTH_SAFETY_MARGIN_PX, textPaddingFor } from './textChrome';
 import { LayoutInvariantError, validateLayout } from './validate';
 import { EPSILON, insetRect, px, type Rect, type Size } from './types';
 
@@ -98,8 +99,24 @@ export class AllocationLoopExceededError extends Error {
 
 const MIN_LEGIBLE_TEXT_PX = 12; // §8.1: resolved text floor is max(surface floor, 12)
 const LINE_HEIGHT = 1.25;
-const SHRINK_STEP_FRACTION = 0.15; // §10.1: each SHRINK_STEP closes 15% of the ideal-floor gap
+const SHRINK_STEP_FRACTION = 0.10; // §10.1: each SHRINK_STEP closes 10% of the ideal-floor gap (was 0.15)
 const TAP_HEIGHT_FONT_MULTIPLIER = 2.2; // §8.4: button height floor = max(tapFloor, fontPx * 2.2)
+// A zone with `mainAlign: 'auto'` centers its occupant block on the main axis
+// when the block fills less than this fraction of the zone's main-axis
+// capacity, and packs from the start otherwise. Lets a zone read as "one
+// intentionally-placed thing" when sparse and "a stack of content" when full,
+// without a per-template constant that needs re-picking as occupant counts change.
+const FILL_THRESHOLD = 0.7;
+// Symmetric to the shrink ladder, but opportunistic rather than corrective: a
+// zone whose occupants use less than this fraction of its main-axis capacity
+// is a candidate to grow into the spare room instead of leaving it empty (see
+// `growToFillZone`). `GROW_TARGET_FILL` deliberately stops short of 100% —
+// growth should never read as wall-to-wall. `GROW_MAX_MULTIPLIER` reuses the
+// 2x-of-ideal ceiling `computeTextDemand` already treats as the sane upper
+// bound for densityScale, applied here as a per-occupant growth cap instead.
+const GROW_FILL_THRESHOLD = 0.55;
+const GROW_TARGET_FILL = 0.82;
+const GROW_MAX_MULTIPLIER = 2.0;
 const FONT_FAMILY = 'Archivo, sans-serif'; // passed to the measurer only — the engine never reads a font file
 const MAX_ITERATIONS = 64; // §8.6: bounds the allocation loop so a bug fails loudly instead of hanging
 
@@ -222,11 +239,20 @@ function computeTextDemand(element: TextElement, surface: NormalisedSurface, mea
   const idealMeasure = measurer.measure(element.content, idealFontPx, element.weight, FONT_FAMILY, Number.POSITIVE_INFINITY);
   const floorMeasure = measurer.measure(element.content, floorFontPx, element.weight, FONT_FAMILY, Number.POSITIVE_INFINITY);
 
+  // The renderer draws this element with CSS padding on top of whatever box
+  // it's handed (TextNode, render-dom.tsx) — so the box has to be sized with
+  // that padding already included, the same way a button's demand already
+  // includes its own padding (computeButtonDemand below). Without this, the
+  // renderer's border-box padding steals room from text the resolver already
+  // decided fits exactly, causing clipped/rewrapped content (see textChrome.ts).
+  const pad = textPaddingFor(element.role);
+
+  const widthMargin = 2 * pad.x + TEXT_WIDTH_SAFETY_MARGIN_PX;
   return {
     id: element.id,
-    ideal: { w: px(idealMeasure.width), h: px(idealFontPx * LINE_HEIGHT) },
-    min: { w: px(floorMeasure.width), h: px(floorFontPx * LINE_HEIGHT) },
-    hardFloor: { w: px(floorMeasure.width), h: px(floorFontPx * LINE_HEIGHT) },
+    ideal: { w: px(idealMeasure.width + widthMargin), h: px(idealFontPx * LINE_HEIGHT + 2 * pad.y) },
+    min: { w: px(floorMeasure.width + widthMargin), h: px(floorFontPx * LINE_HEIGHT + 2 * pad.y) },
+    hardFloor: { w: px(floorMeasure.width + widthMargin), h: px(floorFontPx * LINE_HEIGHT + 2 * pad.y) },
     floorReason: flooredBySurface
       ? `floored at ${Math.round(floorFontPx)}px by the surface's minimum legible text size`
       : null,
@@ -362,7 +388,7 @@ function measureOccupant(
   zone: Zone,
   surface: NormalisedSurface,
   measurer: TextMeasurer,
-): { size: Size; lines: number } {
+): { size: Size; lines: number; naturalLines: number } {
   const element = state.element;
   if (element.type === 'text') {
     // Cross-axis clamping: a text occupant in a vertically-stacking zone is
@@ -373,27 +399,35 @@ function measureOccupant(
     // circular, and every horizontally-stacking zone in this creative only
     // ever holds short, single-line labels, so the simplification costs
     // nothing in practice. Documented here rather than left implicit.
-    const maxWidth = zone.flow === 'stack-y' ? zone.rect.w : Number.POSITIVE_INFINITY;
+    //
+    // The renderer draws this box with CSS padding on top of it (TextNode),
+    // so the padding budget has to come out of the wrap width here — and
+    // back onto the returned size below — or a box already sized to exactly
+    // fit its text loses real content room the moment the renderer pads it.
+    // See textChrome.ts.
+    const pad = textPaddingFor(element.role);
+    const maxWidth = zone.flow === 'stack-y' ? Math.max(0, zone.rect.w - 2 * pad.x) : Number.POSITIVE_INFINITY;
     const result = measurer.measure(element.content, state.scale, element.weight, FONT_FAMILY, maxWidth);
-    const lines = Math.max(1, Math.min(result.lines, state.maxLines));
-    const width = Math.min(result.width, maxWidth);
-    const size = clampCrossAxis({ w: px(width), h: px(lines * state.scale * LINE_HEIGHT) }, zone, false);
-    return { size, lines };
+    const naturalLines = result.lines;
+    const lines = Math.max(1, Math.min(naturalLines, state.maxLines));
+    const width = Math.min(result.width, maxWidth) + 2 * pad.x + TEXT_WIDTH_SAFETY_MARGIN_PX;
+    const size = clampCrossAxis({ w: px(width), h: px(lines * state.scale * LINE_HEIGHT + 2 * pad.y) }, zone, false);
+    return { size, lines, naturalLines };
   }
   if (element.type === 'button') {
     const size = clampCrossAxis(buttonSizeAtScale(element, state.scale, surface, measurer), zone, false);
-    return { size, lines: 1 };
+    return { size, lines: 1, naturalLines: 1 };
   }
   if (element.type === 'image') {
     const size = clampCrossAxis(imageSizeAtScale(element, state.scale), zone, true);
-    return { size, lines: 0 };
+    return { size, lines: 0, naturalLines: 0 };
   }
   // scan: fixed size, deliberately NEVER passed through clampCrossAxis. A
   // QR below its module floor doesn't scan (§8.4) — unlike an image, it has
   // no acceptable smaller rendering, so if it doesn't fit its zone that is
   // real overflow (checked explicitly in detectOverflow below), not
   // something to paper over with a silent resize.
-  return { size: state.demand.ideal, lines: 0 };
+  return { size: state.demand.ideal, lines: 0, naturalLines: 0 };
 }
 
 function buildDegradableState(state: AllocState, template: Template) {
@@ -572,11 +606,11 @@ function allocate(
 // It is a documented compromise on an impossible surface, not a hidden one:
 // resolve() marks the whole layout 'constrained' whenever this engages.
 function fitToZoneByForce(
-  measured: readonly { size: Size; lines: number }[],
+  measured: readonly { size: Size; lines: number; naturalLines: number }[],
   mainSizes: readonly number[],
   gapPx: number,
   capacityMain: number,
-): { size: Size; lines: number }[] {
+): { size: Size; lines: number; naturalLines: number }[] {
   const occupantCount = mainSizes.length;
   const gapsTotal = gapPx * Math.max(0, occupantCount - 1);
   const occupantBudget = Math.max(0, capacityMain - gapsTotal);
@@ -586,7 +620,80 @@ function fitToZoneByForce(
   return measured.map((m) => ({
     size: { w: px(m.size.w * factor), h: px(m.size.h * factor) },
     lines: m.lines,
+    naturalLines: m.naturalLines,
   }));
+}
+
+// The opposite case from `fitToZoneByForce`: a zone whose occupants use less
+// than `GROW_FILL_THRESHOLD` of its main-axis capacity has spare room going
+// to waste rather than a fit problem to solve. This reuses the same numeric
+// "knob" the shrink ladder turns (`state.scale`, documented on `Demand`) so
+// growth is just that knob moving the other direction, bounded and
+// opportunistic rather than corrective — it never has to run because nothing
+// downstream depends on it, only the size these occupants render at.
+function growToFillZone(
+  occupants: readonly AllocState[],
+  measured: readonly { size: Size; lines: number; naturalLines: number }[],
+  zone: Zone,
+  surface: NormalisedSurface,
+  measurer: TextMeasurer,
+  capacityMain: number,
+): { size: Size; lines: number; naturalLines: number }[] {
+  const gapsTotal = zone.gapPx * Math.max(0, occupants.length - 1);
+  const mainSizes = measured.map((m) => (zone.flow === 'stack-y' ? m.size.h : m.size.w));
+  const occupantTotal = mainSizes.reduce((sum, v) => sum + v, 0);
+  if (occupantTotal <= 0) return [...measured];
+
+  // A text occupant that already needs more lines than `maxLines` allows at
+  // its CURRENT size is cross-axis-constrained, not under-filled — its box
+  // is short on the main axis only because its width ran out first. Growing
+  // its font in that state doesn't render "the same text, bigger"; it clips
+  // MORE of it (a headline already ellipsised to "FitPulse…" at 48px becomes
+  // "Fit…" at 96px, not a bigger "FitPulse…"). `newlyTruncated` below only
+  // catches truncation growth *introduces*; this catches the zone where it
+  // was already present, which growth would otherwise make strictly worse —
+  // bailing out for the whole zone rather than growing everything else
+  // around a text box that stays the same size keeps the block visually
+  // coherent instead of a partially-grown patchwork.
+  const alreadyClipped = occupants.some(
+    (state, i) => state.element.type === 'text' && measured[i]!.naturalLines > state.maxLines,
+  );
+  if (alreadyClipped) return [...measured];
+
+  const occupantBudget = Math.max(0, capacityMain - gapsTotal);
+  const factor = clamp((occupantBudget * GROW_TARGET_FILL) / occupantTotal, 1, GROW_MAX_MULTIPLIER);
+  if (factor <= 1 + EPSILON) return [...measured];
+
+  const priorScales = occupants.map((s) => s.scale);
+  const grown = occupants.map((state, i) => {
+    if (state.element.type === 'scan') return measured[i]!;
+    const ceiling = state.demand.idealScale * GROW_MAX_MULTIPLIER;
+    state.scale = Math.min(state.scale * factor, ceiling);
+    return measureOccupant(state, zone, surface, measurer);
+  });
+
+  // Two ways growth can go wrong that weren't possible before it: the grown
+  // block overflows the zone (font size doesn't scale wrapped text height
+  // perfectly linearly — it can cross a wrap boundary right at the size that
+  // looked safe), or a text element that fit within its `maxLines` at the
+  // old size now needs more lines than that at the new, wider one (silently
+  // introducing truncation that wasn't there a moment ago). Either one is
+  // reverted in full rather than partially compensated — a zone this far
+  // under threshold was nowhere near either problem before growth, so this
+  // only fires in rare near-boundary cases, and "don't grow" is never a
+  // worse outcome than not having tried.
+  const grownMain = grown.map((m) => (zone.flow === 'stack-y' ? m.size.h : m.size.w));
+  const grownTotal = grownMain.reduce((sum, v) => sum + v, 0) + gapsTotal;
+  const newlyTruncated = occupants.some(
+    (state, i) => grown[i]!.naturalLines > state.maxLines && measured[i]!.naturalLines <= state.maxLines,
+  );
+  if (grownTotal - capacityMain > EPSILON || newlyTruncated) {
+    occupants.forEach((state, i) => {
+      state.scale = priorScales[i]!;
+    });
+    return [...measured];
+  }
+  return grown;
 }
 
 function position(
@@ -628,6 +735,9 @@ function position(
     if (constrained && totalMainBeforeFit - capacityMain > EPSILON) {
       measured = fitToZoneByForce(measured, mainSizes, zone.gapPx, capacityMain);
       mainSizes = measured.map((m) => (zone.flow === 'stack-y' ? m.size.h : m.size.w));
+    } else if (totalMainBeforeFit > 0 && totalMainBeforeFit / capacityMain < GROW_FILL_THRESHOLD) {
+      measured = growToFillZone(occupants, measured, zone, surface, measurer, capacityMain);
+      mainSizes = measured.map((m) => (zone.flow === 'stack-y' ? m.size.h : m.size.w));
     }
 
     // Zones tile the usable rect exactly in float precision (splitRect,
@@ -644,22 +754,27 @@ function position(
     const crossSizes = measured.map((m) => (zone.flow === 'stack-y' ? m.size.w : m.size.h));
     const totalMain = mainSizes.reduce((sum, v) => sum + v, 0) + zone.gapPx * Math.max(0, occupants.length - 1);
     const leftoverMain = Math.max(0, capacityMain - totalMain);
-    // The same `align` value governs leftover space on both axes: cross-axis
-    // alignment is what §8.7 describes, and we additionally use it to place
-    // an undersized occupant block within its zone's main-axis span (e.g. a
-    // lone CTA centred rather than pinned to the zone's leading edge). One
-    // alignment concept applied twice reads more simply than two separate
-    // controls would, for a difference that only shows up when content
-    // doesn't fill its zone.
-    let cursor = zone.align === 'center' ? leftoverMain / 2 : zone.align === 'end' ? leftoverMain : 0;
+    // `mainAlign` and `crossAlign` are deliberately separate controls (see
+    // the Zone type in templates.ts). `crossAlign` is fixed per zone — it is
+    // what keeps sibling zones' content on a shared visual line/column, and
+    // must never move just because a zone happens to be under-filled.
+    // `mainAlign: 'auto'` instead adapts to how much of the zone the
+    // occupants actually fill: a sparse block centers so it reads as
+    // intentional rather than pushed to one edge; a fuller one packs from
+    // the start so it reads top-to-bottom.
+    const fill = capacityMain > 0 ? totalMain / capacityMain : 1;
+    const mainPack = zone.mainAlign === 'auto' ? (fill < FILL_THRESHOLD ? 'center' : 'start') : zone.mainAlign;
+    let cursor = mainPack === 'center' ? leftoverMain / 2 : mainPack === 'end' ? leftoverMain : 0;
 
     occupants.forEach((state, i) => {
       const size = measured[i]!.size;
       const lines = measured[i]!.lines;
+      const naturalLines = measured[i]!.naturalLines;
       const mainSize = mainSizes[i]!;
       const crossSize = crossSizes[i]!;
       const leftoverCross = Math.max(0, capacityCross - crossSize);
-      const crossOffset = zone.align === 'center' ? leftoverCross / 2 : zone.align === 'end' ? leftoverCross : 0;
+      const crossOffset =
+        zone.crossAlign === 'center' ? leftoverCross / 2 : zone.crossAlign === 'end' ? leftoverCross : 0;
 
       const rawRect: Rect =
         zone.flow === 'stack-y'
@@ -700,7 +815,16 @@ function position(
               typography: {
                 fontPx: state.scale,
                 lines,
-                truncated: state.ellipsisApplied || lines < state.element.maxLines,
+                // Truncated means content was actually cut — the natural
+                // (unclamped) wrap needed more lines than what's currently
+                // allowed. Comparing against `element.maxLines` (the
+                // original spec value) instead of the live `state.maxLines`
+                // would flag any headline that simply fits comfortably in
+                // fewer lines than its allowance as "truncated", which is
+                // wrong and — because this also drives WebkitLineClamp in
+                // TextNode — can silently ellipsis content that isn't
+                // actually being cut.
+                truncated: state.ellipsisApplied || naturalLines > state.maxLines,
               },
             }
           : {}),

@@ -5,8 +5,12 @@
 import { describe, expect, it } from 'vitest';
 import { resolve } from '../src/engine/resolver';
 import { defineSurface } from '../src/engine/surface';
+import { estimateMeasurer } from '../src/engine/measure';
+import { textPaddingFor } from '../src/engine/textChrome';
 import { keelAd } from '../src/demo/creative';
 import { surfaces } from '../src/demo/surfaces';
+import { fernAd } from '../src/demo/creatives/fern';
+import { fitPulseAd } from '../src/demo/creatives/fitpulse';
 
 describe('resolve — every shipped surface', () => {
   for (const { key, profile } of surfaces) {
@@ -114,4 +118,89 @@ describe('resolve — recomposition, not scaling', () => {
     const tallOrder = centreYOrder(resolve(keelAd, tall));
     expect(wideOrder).not.toEqual(tallOrder);
   });
+});
+
+// Regression coverage for a rendering bug found on the retail kiosk / print
+// panel / compact banner surfaces: TextNode (render-dom.tsx) draws every
+// text box with CSS padding on top of the resolver's rect, via
+// `box-sizing: border-box` — which shrinks the box's *content* area rather
+// than enlarging the box. The resolver now bakes that same padding into
+// computeTextDemand/measureOccupant (textChrome.ts) so the rect it hands out
+// already has room for it. These tests re-derive the padded content width
+// from each placed element's own rect and independently re-wrap its text
+// with the same measurer the resolver used, to catch a regression of either
+// half of that fix: a box too narrow/short for what it promises to show, or
+// a `truncated`/line-clamp flag that doesn't match what was actually cut.
+describe('resolve — text boxes budget room for the renderer\'s own padding', () => {
+  const cases = [
+    { adName: 'fern', ad: fernAd, surfaceKey: 'retailKiosk' },
+    { adName: 'fitpulse', ad: fitPulseAd, surfaceKey: 'printPanel' },
+    { adName: 'fitpulse', ad: fitPulseAd, surfaceKey: 'cramped' },
+  ] as const;
+
+  for (const { adName, ad, surfaceKey } of cases) {
+    const profile = surfaces.find((s) => s.key === surfaceKey)!.profile;
+
+    it(`"${adName}" on "${surfaceKey}": every placed text box already fits its own text at its padded content width`, () => {
+      const layout = resolve(ad, profile, { measurer: estimateMeasurer });
+      for (const element of ad.elements) {
+        if (element.type !== 'text') continue;
+        const entry = layout.elements[element.id];
+        if (!entry?.placed || !entry.typography) continue;
+
+        const pad = textPaddingFor(element.role);
+        const contentWidth = Math.max(0, entry.rect.w - 2 * pad.x);
+        // Re-wrapping at the box's own achieved content width reproduces the
+        // exact same greedy line breaks the resolver made internally (every
+        // line the resolver produced is already <= this width by
+        // construction), so this is a like-for-like check, not an
+        // approximation.
+        const rewrapped = estimateMeasurer.measure(
+          element.content,
+          entry.typography.fontPx,
+          element.weight,
+          'Archivo, sans-serif',
+          contentWidth,
+        );
+
+        expect(
+          rewrapped.lines,
+          `"${element.id}" on "${surfaceKey}": needs ${rewrapped.lines} line(s) to show at its resolved ` +
+            `${entry.typography.fontPx}px within its padded content width (${contentWidth}px), but the box ` +
+            `promises only ${entry.typography.lines} — CSS padding will clip the rest.`,
+        ).toBeLessThanOrEqual(entry.typography.lines);
+      }
+    });
+
+    it(`"${adName}" on "${surfaceKey}": 'truncated' is never set on content that fits without cutting`, () => {
+      const layout = resolve(ad, profile, { measurer: estimateMeasurer });
+      for (const element of ad.elements) {
+        if (element.type !== 'text') continue;
+        const entry = layout.elements[element.id];
+        if (!entry?.placed || !entry.typography) continue;
+
+        const pad = textPaddingFor(element.role);
+        const contentWidth = Math.max(0, entry.rect.w - 2 * pad.x);
+        const rewrapped = estimateMeasurer.measure(
+          element.content,
+          entry.typography.fontPx,
+          element.weight,
+          'Archivo, sans-serif',
+          contentWidth,
+        );
+
+        // If the natural wrap needs no more lines than the box already
+        // shows, nothing was cut by line count — flagging `truncated` here
+        // would be the exact bug this suite guards against (comparing the
+        // clamped line count against the element's original `maxLines`
+        // instead of what was actually rendered).
+        if (rewrapped.lines <= entry.typography.lines) {
+          expect(
+            entry.typography.truncated,
+            `"${element.id}" on "${surfaceKey}" fits on ${entry.typography.lines} line(s) with nothing cut, but was flagged truncated`,
+          ).toBe(false);
+        }
+      }
+    });
+  }
 });
