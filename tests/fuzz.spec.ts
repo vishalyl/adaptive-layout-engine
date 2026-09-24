@@ -1,20 +1,15 @@
-// §16.3 — the headline test. 2000 randomly generated surfaces — width,
-// height, safe area, interaction mode, and text floor all randomised —
-// resolved against the real KEEL creative, asserting zero overlaps, zero
-// out-of-bounds placements, and no undocumented hard-constraint violation.
-//
-// The resolver is fuzzed against 2000 randomly generated surfaces on every
-// test run; the invariant is that no combination of dimensions and
-// constraints can produce an overlap or a clip.
+// The headline robustness test: every shipped ad against randomly
+// generated surfaces — width, height, safe area, interaction mode and text
+// floor all randomised — asserting no overlap, nothing out of bounds, and
+// no hard-floor violation except as the explicitly flagged 'constrained'
+// last resort. Seeded, so any failure is reproducible from the printed seed.
 
 import { describe, expect, it } from 'vitest';
-import { resolve } from '../src/engine/resolver';
+import { resolve } from '../src/resolver';
 import { defineSurface, type SurfaceProfile } from '../src/engine/surface';
-import { keelAd } from '../src/demo/creative';
+import { ads } from '../src/demo/creatives';
 
-// A tiny seeded PRNG (mulberry32) — deterministic and dependency-free, so a
-// failure is reproducible from the printed seed alone, with no external
-// randomness source involved.
+// mulberry32 — a tiny deterministic PRNG.
 function mulberry32(seed: number): () => number {
   let state = seed;
   return () => {
@@ -33,71 +28,51 @@ function pick<T>(rand: () => number, options: readonly T[]): T {
 function randomSurface(rand: () => number): SurfaceProfile {
   const widthPx = 120 + rand() * (2400 - 120);
   const heightPx = 80 + rand() * (2400 - 80);
-
-  // Each safe-area edge is at most 30% of its axis, so the sum of opposing
-  // edges never exceeds 60% of that axis — always comfortably inside what
-  // defineSurface accepts, and always leaves a positive usable rect.
   const safeArea = {
     top: rand() * heightPx * 0.3,
     bottom: rand() * heightPx * 0.3,
     left: rand() * widthPx * 0.3,
     right: rand() * widthPx * 0.3,
   };
-
   const mode = pick(rand, ['touch', 'pointer', 'passive'] as const);
-  const interaction =
-    mode === 'passive' ? ({ mode: 'passive' } as const) : ({ mode, minTapTargetPx: 24 + rand() * 60 } as const);
-
+  const interaction = mode === 'passive' ? ({ mode } as const) : ({ mode, minTapTargetPx: 24 + rand() * 60 } as const);
   const distance = pick(rand, ['near', 'mid', 'far'] as const);
-  const viewing =
-    distance === 'near' ? ({ distance: 'near' } as const) : ({ distance, minTextPx: 10 + rand() * 40 } as const);
-
+  const viewing = distance === 'near' ? ({ distance } as const) : ({ distance, minTextPx: 10 + rand() * 40 } as const);
   return defineSurface({ widthPx, heightPx, safeArea, interaction, viewing });
 }
 
-const ITERATIONS = 2000;
+const PER_AD = 400;
 const SEED = process.env['FUZZ_SEED'] ? Number(process.env['FUZZ_SEED']) : 424242;
 
-describe(`fuzz — ${ITERATIONS} random surfaces (seed ${SEED})`, () => {
-  it('never overlaps, never places an element out of bounds, and never leaves an undocumented hard-constraint violation', () => {
-    // eslint-disable-next-line no-console
-    console.log(`fuzz seed: ${SEED} (rerun with FUZZ_SEED=${SEED} to reproduce exactly)`);
-    const rand = mulberry32(SEED);
+describe(`fuzz — ${PER_AD} random surfaces per ad, ${ads.length} ads (seed ${SEED})`, () => {
+  for (const ad of ads) {
+    it(`${ad.key}: never overlaps, never leaves the surface, never breaks a floor silently`, () => {
+      const rand = mulberry32(SEED);
+      for (let i = 0; i < PER_AD; i++) {
+        const profile = randomSurface(rand);
+        const context = () => `${ad.key}, iteration ${i}, seed ${SEED}\nsurface: ${JSON.stringify(profile)}`;
 
-    for (let i = 0; i < ITERATIONS; i++) {
-      const profile = randomSurface(rand);
-      const context = () =>
-        `iteration ${i}, seed ${SEED}\nsurface: ${JSON.stringify(profile)}\n` +
-        `(rerun with FUZZ_SEED=${SEED} to reproduce)`;
+        let layout: ReturnType<typeof resolve>;
+        try {
+          layout = resolve(ad.spec, profile);
+        } catch (err) {
+          throw new Error(`resolve() threw at ${context()}\n\n${(err as Error).message}`);
+        }
 
-      let layout: ReturnType<typeof resolve>;
-      try {
-        layout = resolve(keelAd, profile);
-      } catch (err) {
-        throw new Error(`resolve() threw at ${context()}\n\n${(err as Error).message}`);
+        const structural = layout.diagnostics.violations.filter(
+          (v) => v.severity === 'error' && (v.kind === 'overlap' || v.kind === 'out-of-bounds'),
+        );
+        expect(structural, `structural violation at ${context()}`).toEqual([]);
+
+        const floors = layout.diagnostics.violations.filter((v) => v.severity === 'error');
+        if (floors.length > 0) {
+          expect(layout.status, `undocumented floor violation at ${context()}: ${JSON.stringify(floors)}`).toBe('constrained');
+        }
+
+        for (const step of layout.diagnostics.rungsApplied) {
+          expect(step.overflowAfter, `a step that didn't help, at ${context()}`).toBeLessThan(step.overflowBefore);
+        }
       }
-
-      // Overlap and out-of-bounds must NEVER happen, degraded or
-      // constrained or not — §10.5 is explicit that clipping is never
-      // acceptable.
-      const structural = layout.diagnostics.violations.filter(
-        (v) => v.severity === 'error' && (v.kind === 'overlap' || v.kind === 'out-of-bounds'),
-      );
-      expect(structural, `structural violation(s) at ${context()}: ${JSON.stringify(structural)}`).toEqual([]);
-
-      // A hard floor (tap target / text / scan) violation is only ever
-      // acceptable as the explicitly-flagged §10.5 compromise on a genuinely
-      // 'constrained' surface — never on one the resolver believes is 'ok'
-      // or merely 'degraded'.
-      const floorViolations = layout.diagnostics.violations.filter(
-        (v) => v.severity === 'error' && v.kind !== 'overlap' && v.kind !== 'out-of-bounds',
-      );
-      if (floorViolations.length > 0) {
-        expect(
-          layout.status,
-          `undocumented floor violation(s) at ${context()}: ${JSON.stringify(floorViolations)}`,
-        ).toBe('constrained');
-      }
-    }
-  });
+    });
+  }
 });

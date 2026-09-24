@@ -1,23 +1,26 @@
-// §16.4 — the test that mechanically proves §0.2: "The resolver must never
-// know a surface's name." This reads every file under src/engine/ as plain
-// text and asserts none of them contain a surface identity — not in a
-// conditional, not in a comment, nowhere — and that the engine imports
-// nothing from src/demo/ or src/render/, and touches no DOM global.
+// The test that mechanically proves the engine's one hard rule: "The
+// resolver must never know a surface's name." The engine is src/spec.ts,
+// src/resolver.ts and everything under src/engine/. This reads each of them
+// as plain text and asserts none contains a surface identity — not in a
+// conditional, not in a comment, nowhere — that none imports the demo or a
+// renderer, and that none touches a DOM global.
 //
 // The surface-key list is imported from the real surfaces module rather
 // than retyped here, so this test can never go stale relative to what
-// src/demo/surfaces.ts actually ships.
+// src/surfaces.ts actually ships.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { surfaces } from '../src/demo/surfaces';
+import { surfaces } from '../src/surfaces';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const ENGINE_DIR = join(here, '..', 'src', 'engine');
+const SRC_DIR = join(here, '..', 'src');
+const ENGINE_DIR = join(SRC_DIR, 'engine');
+const ENGINE_ROOT_FILES = ['spec.ts', 'resolver.ts'].map((f) => join(SRC_DIR, f));
 
-// Generic device/surface-category words the brief calls out by name (§16.4),
+// Generic device/surface-category words the brief calls out by name,
 // independent of what this project happens to name its own shipped
 // surfaces.
 const FORBIDDEN_WORDS = ['mobile', 'kiosk', 'broadcast', 'phone', 'tv', 'portrait', 'landscape'];
@@ -35,17 +38,21 @@ function listTsFiles(dir: string): string[] {
   return out;
 }
 
-const engineFiles = listTsFiles(ENGINE_DIR);
+const engineFiles = [...ENGINE_ROOT_FILES, ...listTsFiles(ENGINE_DIR)];
 const surfaceKeys = surfaces.map((s) => s.key);
 const forbiddenStrings = [...surfaceKeys, ...FORBIDDEN_WORDS];
+// What the engine may never import: the demo, the renderers, and the
+// root-level files that belong to them (named surfaces, the app, the DOM
+// renderer).
+const FORBIDDEN_IMPORT = /['"](?:\.\.?\/)+(?:demo|render)\/|['"](?:\.\.?\/)+(?:surfaces|App|render-dom|main)['"]/;
 
-describe('engine purity — no surface identity anywhere under src/engine/', () => {
+describe('engine purity — no surface identity anywhere in the engine', () => {
   it('found at least one engine file to check (the test itself is not vacuous)', () => {
     expect(engineFiles.length).toBeGreaterThan(5);
   });
 
   for (const file of engineFiles) {
-    const relative = file.slice(ENGINE_DIR.length + 1);
+    const relative = file.slice(SRC_DIR.length + 1).replace(/\\/g, '/');
     const content = readFileSync(file, 'utf8');
 
     it(`${relative}: contains no surface-identity string`, () => {
@@ -56,10 +63,10 @@ describe('engine purity — no surface identity anywhere under src/engine/', () 
       expect(found, `${relative} contains forbidden word(s): ${found.join(', ')}`).toEqual([]);
     });
 
-    it(`${relative}: imports nothing from src/demo/ or src/render/`, () => {
+    it(`${relative}: imports nothing from the demo or a renderer`, () => {
       const importLines = content.match(/^\s*(?:import|export)[^;]*from\s+['"][^'"]+['"];?/gm) ?? [];
-      const offending = importLines.filter((line) => /['"](\.\.\/)*(demo|render)\//.test(line));
-      expect(offending, `${relative} imports from demo/ or render/: ${offending.join(' | ')}`).toEqual([]);
+      const offending = importLines.filter((line) => FORBIDDEN_IMPORT.test(line));
+      expect(offending, `${relative} imports from the demo or a renderer: ${offending.join(' | ')}`).toEqual([]);
     });
 
     it(`${relative}: references no DOM global (document, window, HTMLElement)`, () => {

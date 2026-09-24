@@ -1,4 +1,4 @@
-import type { NamedSurface } from './surfaces';
+import type { NamedSurface } from '../surfaces';
 import { SurfaceThumb } from './SurfaceThumb';
 
 export interface SurfacePickerProps {

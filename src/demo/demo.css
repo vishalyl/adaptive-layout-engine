@@ -69,7 +69,7 @@
   --warn:    #E3A93A;   --warn-wash:    rgba(227, 169, 58, 0.12);   --warn-edge:    rgba(227, 169, 58, 0.35);
   --danger:  #E8624A;   --danger-wash:  rgba(232, 98, 74, 0.12);    --danger-edge:  rgba(232, 98, 74, 0.35);
 
-  /* --- A7. Phase colours (diagnostics timeline, §13) --------
+  /* --- A7. Phase colours (diagnostics timeline) --------
      Seven resolver phases, seven hues at identical low chroma so
      the timeline scans as one object with coded rows, not a
      rainbow. */
@@ -357,6 +357,9 @@ p { margin: 0; text-wrap: pretty; }
   background:
     linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0) 220px),
     var(--ink-750);
+  /* Subtle top-edge catch light — reads as a physical surface in dark mode */
+  border: 1px solid rgba(255,255,255,0.06);
+  border-bottom: 1px solid rgba(255,255,255,0.03);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -592,18 +595,16 @@ p { margin: 0; text-wrap: pretty; }
 
 .brand-header-grid {
   display: grid;
-  /* Both columns size to their own content instead of the first being
-     `1fr` — a fractional track fills all leftover space in the row even
-     though `.brand-header-main` itself caps out well short of it, which is
-     what put a wide dead gap between the copy and the credit card on any
-     viewport wider than ~1000px. Sizing both to content keeps them reading
-     as one header instead of two unrelated blocks. */
-  grid-template-columns: minmax(0, 660px) minmax(320px, 420px);
-  justify-content: start;
+  /* The copy takes all the width the card doesn't, and the card sits on
+     the container's right edge, lined up with the demo panels below — so
+     there's no dead strip beside the card and no fixed-width copy column
+     stranded short of it. Centring the two vertically keeps the shorter
+     copy from leaving an empty block under itself next to the taller card. */
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 440px);
   gap: var(--sp-9);
-  align-items: start;
+  align-items: center;
 }
-.brand-header-main { min-width: 0; max-width: 660px; }
+.brand-header-main { min-width: 0; }
 
 @media (max-width: 1040px) {
   .brand-header-grid { grid-template-columns: minmax(0, 1fr); }
@@ -691,7 +692,7 @@ p { margin: 0; text-wrap: pretty; }
   font-size: var(--fs-xl);
   line-height: var(--lh-body);
   color: var(--text);
-  max-width: 66ch;
+  max-width: 72ch;
   margin: 0 0 var(--sp-4);
   font-weight: 400;
 }
@@ -712,7 +713,6 @@ p { margin: 0; text-wrap: pretty; }
   border-radius: var(--r-md);
   background: var(--ink-750);
   box-shadow: var(--lift-1);
-  align-self: start;
 }
 .brand-credit::before {
   content: '';
@@ -967,7 +967,8 @@ p { margin: 0; text-wrap: pretty; }
     /* booth vignette */
     radial-gradient(120% 100% at 50% 30%, transparent 40%, rgba(0, 0, 0, 0.45) 100%),
     var(--ink-900);
-  box-shadow: var(--well);
+  /* Soft inner glow: top edge catches light like a physical lightbox */
+  box-shadow: var(--well), inset 0 1px 0 rgba(255,255,255,0.04);
   overflow: hidden;
 }
 

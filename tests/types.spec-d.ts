@@ -1,18 +1,18 @@
-// Type-level assertions (BUILD_SPEC.md §16.5). These files are never run —
+// Type-level assertions. These files are never run —
 // they exist purely so `tsc` (via `npm run typecheck`) fails the build if a
 // type guarantee silently stops holding. A `// @ts-expect-error` line is
 // itself the assertion: if the line below it ever stops erroring, tsc
 // reports "Unused '@ts-expect-error' directive" and the build fails.
 //
-// This file grows gate by gate, matching what has been built so far
-// (BUILD_SPEC.md §23). At Gate 2 only spec.ts and surface.ts exist, so the
-// ResolvedLayout-based assertions ("layout.elements.headline resolves")
-// land once resolver.ts defines PlacedElement/ResolvedLayout in a later
-// gate — they are not faked here.
+// Covers the spec, the surface unions, colours, and the resolved layout's
+// id-keyed elements ("layout.elements.headline" compiles,
+// "layout.elements.typo" doesn't).
 
 import { expectTypeOf } from 'vitest';
-import { defineAd, type ElementIdOf } from '../src/engine/spec';
+import { defineAd, type ElementIdOf } from '../src/spec';
+import { resolve, type LayoutEntry } from '../src/resolver';
 import type { Interaction, Viewing } from '../src/engine/surface';
+import type { HexColor } from '../src/engine/contrast';
 
 // --- defineAd preserves literal id types through ElementIdOf -------------
 
@@ -53,6 +53,19 @@ expectTypeOf<ElementIdOf<typeof sample>>().toEqualTypeOf<'headline' | 'cta'>();
 const badId: ElementIdOf<typeof sample> = 'nope';
 void badId;
 
+// --- the resolved layout is keyed by the spec's real ids ------------------
+
+const layout = resolve(sample, {
+  widthPx: 320,
+  heightPx: 480,
+  safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
+  interaction: { mode: 'passive' },
+  viewing: { distance: 'near' },
+});
+expectTypeOf(layout.elements.headline).toEqualTypeOf<LayoutEntry>();
+// @ts-expect-error 'typo' is not one of the spec's element ids
+void layout.elements.typo;
+
 // --- Interaction: a passive surface has no minTapTargetPx ----------------
 
 function tapFloor(interaction: Interaction): number | null {
@@ -79,6 +92,14 @@ void farWithoutFloor;
 // @ts-expect-error 'near' viewing distance carries no minTextPx field
 const nearWithFloor: Viewing = { distance: 'near', minTextPx: 20 };
 void nearWithFloor;
+
+// --- Colours are hex strings, not arbitrary CSS -------------------------
+
+// @ts-expect-error a named CSS colour is not a HexColor
+const namedColour: HexColor = 'teal';
+void namedColour;
+const hexColour: HexColor = '#86B8A9';
+void hexColour;
 
 function textFloor(viewing: Viewing): number | null {
   switch (viewing.distance) {

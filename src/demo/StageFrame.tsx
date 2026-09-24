@@ -1,4 +1,4 @@
-// The scale-to-fit preview shell (§14.3). The ad is rendered at its TRUE
+// The scale-to-fit preview shell. The ad is rendered at its TRUE
 // pixel dimensions in a child element, then that whole element is scaled
 // down with a CSS `transform` applied from OUTSIDE — the resolver never
 // sees the scaled-down numbers, only the real ones, so the constraint
@@ -68,9 +68,17 @@ export function StageFrame({ widthPx, heightPx, maxWidth = 640, maxHeight = 420,
           className="stage-frame"
           style={{ width: widthPx * scale, height: heightPx * scale, minWidth: 0, minHeight: 0 }}
         >
+          {/* The ad is laid out at its TRUE size (widthPx × heightPx) and
+              only this transform shrinks it onto the screen — so the browser
+              wraps text at exactly the pixel sizes the resolver measured. */}
           <div
             className="stage-surface"
-            style={{ width: '100%', height: '100%', transformOrigin: 'top left', transform: zoom !== 1 ? `scale(${zoom})` : undefined }}
+            style={{
+              width: widthPx,
+              height: heightPx,
+              transformOrigin: 'top left',
+              transform: `scale(${scale * zoom})`,
+            }}
           >
             {children}
             {/* Corner ruler ticks — pure chrome, drawn at the same scale as

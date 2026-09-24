@@ -1,9 +1,9 @@
-// §14.6 — click any element on the stage, see exactly why it ended up
+// Click any element on the stage, see exactly why it ended up
 // where it did. This answers "walk through why a specific element ended up
 // at a specific position and size" by pointing, not by memory.
 
-import type { AdElement, AdSpec } from '../engine/spec';
-import type { ResolvedLayout } from '../engine/resolver';
+import type { AdElement, AdSpec } from '../spec';
+import type { ResolvedLayout } from '../resolver';
 import { InfoTooltip } from './InfoTooltip';
 
 export interface ElementInspectorProps {
@@ -74,6 +74,18 @@ export function ElementInspector({ spec, layout, selectedId }: ElementInspectorP
                 <dd className="mono">
                   {entry.typography.lines}
                   {entry.typography.truncated ? ' (truncated)' : ''}
+                </dd>
+              </>
+            )}
+            {entry.contrast && (
+              <>
+                <dt>
+                  contrast
+                  <InfoTooltip text="Brand mark colour against the worst-case colour behind it. Below the surface's floor, the resolver first tries another preferred zone, then paints a plate behind the mark." />
+                </dt>
+                <dd className="mono">
+                  {entry.contrast.ratio.toFixed(2)}:1 vs {entry.contrast.backdrop} (min {entry.contrast.required}:1)
+                  {entry.contrast.plate ? ` — plated ${entry.contrast.plate}` : ''}
                 </dd>
               </>
             )}

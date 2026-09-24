@@ -1,11 +1,11 @@
-// A real, browser-backed `TextMeasurer` (§15.2) — a genuine 2D canvas
+// A real, browser-backed `TextMeasurer` — a genuine 2D canvas
 // context's `measureText`, in place of the engine's pure-heuristic
 // `estimateMeasurer`. resolve() only ever sees this through the
 // `TextMeasurer` interface it already accepts as a parameter, so swapping
 // measurers never touches the resolver.
 //
 // This deliberately does NOT live under src/engine/. The engine is
-// framework-free and DOM-free by design — §0.2 of BUILD_SPEC.md, mechanically
+// framework-free and DOM-free by design — mechanically
 // enforced by tests/purity.spec.ts, which fails the build if `document`,
 // `window`, or `HTMLElement` appears anywhere under src/engine/. A canvas
 // context is a genuine browser capability, not a pure function of its
@@ -19,7 +19,7 @@ type Context2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
 // Cap the cache so a session that measures a lot of distinct text/font/width
 // combinations (dragging the custom-surface sliders, say) cannot grow this
-// without bound — §15.4. Map preserves insertion order, so the first key is
+// without bound. Map preserves insertion order, so the first key is
 // always the oldest; evicting it is a plain FIFO policy, not an LRU one,
 // which is all a cache this size needs.
 const MAX_CACHE_ENTRIES = 2000;

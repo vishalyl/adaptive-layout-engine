@@ -1,4 +1,4 @@
-// §14.4 — the highest-leverage feature in the build. Live sliders let a
+// The highest-leverage feature in the build. Live sliders let a
 // grader invent a surface profile the engine has never seen and watch it
 // classify and resolve in real time, before the interview even happens.
 //
@@ -171,7 +171,7 @@ export function CustomSurfacePanel({ onResolve, activeProfile, syncKey, activeLa
   // Live classification preview — pure geometry, computed the same way
   // Phase 0/1 of the resolver would, so the numbers shown here are exactly
   // what resolve() will use, not an approximation of it.
-  let preview: { aspect: number; aspectClass: string; scaleClass: string; templateId: string } | null = null;
+  let preview: { aspect: number; aspectClass: string; templateId: string } | null = null;
   try {
     const full: Rect = { x: px(0), y: px(0), w: px(draft.widthPx), h: px(draft.heightPx) };
     const usable = insetRect(full, { top: draft.safeTop, right: draft.safeRight, bottom: draft.safeBottom, left: draft.safeLeft });
@@ -180,8 +180,7 @@ export function CustomSurfacePanel({ onResolve, activeProfile, syncKey, activeLa
       preview = {
         aspect: c.aspect,
         aspectClass: c.aspectClass,
-        scaleClass: c.scaleClass,
-        templateId: selectTemplate(c.aspectClass, c.scaleClass),
+        templateId: selectTemplate(c.aspectClass),
       };
     }
   } catch {
@@ -383,8 +382,6 @@ export function CustomSurfacePanel({ onResolve, activeProfile, syncKey, activeLa
           <dd className="mono">{preview.aspect.toFixed(2)}</dd>
           <dt>Aspect class</dt>
           <dd className="mono">{preview.aspectClass}</dd>
-          <dt>Scale class</dt>
-          <dd className="mono">{preview.scaleClass}</dd>
           <dt>
             Template
             <InfoTooltip text="The engine's own classification of your current draft — the same computation the resolver itself uses." />

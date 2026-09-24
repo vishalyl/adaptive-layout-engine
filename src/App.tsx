@@ -8,25 +8,25 @@
 // URL persistence: all key state is synced to query params for shareable URLs.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { resolve, type ResolvedLayout } from '../engine/resolver';
-import type { SurfaceProfile } from '../engine/surface';
-import type { TextMeasurer } from '../engine/measure';
-import { ads } from './creatives';
+import { resolve, type ResolvedLayout } from './resolver';
+import type { SurfaceProfile } from './engine/surface';
+import type { TextMeasurer } from './engine/measure';
+import { ads } from './demo/creatives';
 import { surfaces } from './surfaces';
-import { RenderDom } from '../render/render-dom';
-import { RenderCanvas } from './RenderCanvas';
-import { createCanvasMeasurer } from '../render/measure-canvas';
-import { StageFrame } from './StageFrame';
-import { SurfacePicker } from './SurfacePicker';
-import { AdPicker } from './AdPicker';
-import { CustomSurfacePanel, DEFAULT_CUSTOM_PROFILE } from './CustomSurfacePanel';
-import { DiagnosticsPanel } from './DiagnosticsPanel';
-import { ElementInspector } from './ElementInspector';
-import { InfoTooltip } from './InfoTooltip';
-import { GuideTab } from './GuideTab';
-import { BrandHeader } from './BrandHeader';
-import { DemoErrorBoundary } from './DemoErrorBoundary';
-import './demo.css';
+import { RenderDom } from './render-dom';
+import { RenderCanvas } from './demo/RenderCanvas';
+import { createCanvasMeasurer } from './render/measure-canvas';
+import { StageFrame } from './demo/StageFrame';
+import { SurfacePicker } from './demo/SurfacePicker';
+import { AdPicker } from './demo/AdPicker';
+import { CustomSurfacePanel, DEFAULT_CUSTOM_PROFILE } from './demo/CustomSurfacePanel';
+import { DiagnosticsPanel } from './demo/DiagnosticsPanel';
+import { ElementInspector } from './demo/ElementInspector';
+import { InfoTooltip } from './demo/InfoTooltip';
+import { GuideTab } from './demo/GuideTab';
+import { BrandHeader } from './demo/BrandHeader';
+import { DemoErrorBoundary } from './demo/DemoErrorBoundary';
+import './demo/demo.css';
 
 type Selection = { readonly kind: 'shipped'; readonly key: string } | { readonly kind: 'custom' };
 type Backend = 'dom' | 'canvas';
@@ -210,7 +210,7 @@ export default function App() {
   }, [scheduleUrlSync]);
 
   // ── Font readiness ────────────────────────────────────────────────────
-  // §15.3: `measureText` reports wrong widths before the webfont has
+  // `measureText` reports wrong widths before the webfont has
   // actually loaded. `document.fonts.ready` is the browser's own signal.
   const [fontsReady, setFontsReady] = useState(false);
   useEffect(() => {
@@ -292,12 +292,6 @@ export default function App() {
     layout: ResolvedLayout,
     label: string,
   ) => {
-    // Compute the on-screen scale: how much the preview container
-    // shrinks the layout surface.  The container's max size is set by
-    // the .stage-viewport defaults (770 px wide, 420 px tall).
-    const containerW = 770;
-    const containerH = 420;
-    const surfaceScale = Math.min(containerW / widthPx, containerH / heightPx, 1);
     return (
       <div className="panel panel-stage">
         <StageFrame widthPx={widthPx} heightPx={heightPx}>
@@ -310,7 +304,6 @@ export default function App() {
                 selectedElementId={selectedElementId}
                 onSelectElement={setSelectedElementId}
                 palette={activeAd.palette}
-                surfaceScale={surfaceScale}
               />
             ) : (
               <RenderCanvas
@@ -429,26 +422,20 @@ export default function App() {
                   </dt>
                   <dd className="mono">{layout.aspectClass}</dd>
                   <dt>
-                    Scale class
-                    <InfoTooltip text="How much room there actually is, based on the shorter side. This decides how many elements the template even attempts — not how they're arranged." />
+                    Steps taken
+                    <InfoTooltip text="How many degradation steps the resolver needed. Each one is the gentlest step, on the worst-priority element, that actually reduced the overflow — see the diagnostics timeline." />
                   </dt>
-                  <dd className="mono">{layout.scaleClass}</dd>
+                  <dd className="mono">{layout.diagnostics.rungsApplied.length - layout.diagnostics.restored.length}</dd>
+                  <dt>
+                    Type scale
+                    <InfoTooltip text="When nothing needed degrading, type grows uniformly on big surfaces (up to 1.8x), so hierarchy is preserved." />
+                  </dt>
+                  <dd className="mono">×{layout.typeScale.toFixed(2)}</dd>
                 </dl>
               </section>
 
-              {backend === 'dom' ? (
-                <ElementInspector spec={activeAd.spec} layout={layout} selectedId={selectedElementId} />
-              ) : (
-                <section className="panel panel-readout">
-                  <div className="panel-head">
-                    <h2>Element inspector</h2>
-                  </div>
-                  <div className="empty">
-                    <p className="empty-title">Inspector shows DOM-only data</p>
-                    <p className="empty-hint">Click an element on the canvas to select it — the full element inspector works with the DOM renderer.</p>
-                  </div>
-                </section>
-              )}
+              {/* Reads only the resolved layout, so it works for both backends. */}
+              <ElementInspector spec={activeAd.spec} layout={layout} selectedId={selectedElementId} />
 
               <DiagnosticsPanel layout={layout} benchmarkStats={benchmarkStats} onRunBenchmark={runBenchmark} benchmarking={benchmarking} stressResult={stressResult} onStressTest={runStressTest} stressRunning={stressRunning} />
             </div>

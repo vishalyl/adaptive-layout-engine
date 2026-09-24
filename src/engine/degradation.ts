@@ -1,76 +1,68 @@
-// The priority-ordered degradation ladder (§10 of BUILD_SPEC.md). This is
-// half of the 35%-weighted algorithm criterion, and the brief specifically
-// calls out "correctness and predictability of the degradation order" — so
-// predictability is what this file is designed around, not cleverness.
+// The degradation ladder and victim selection. The resolver (resolver.ts)
+// owns the loop; this file owns the two rules the loop is built from, kept
+// pure so each can be tested on its own:
+//
+//   availableRungs(state)  — which steps an element may still take, gentlest
+//                            first. Which of them is actually TAKEN is decided
+//                            by the resolver: the first one that measurably
+//                            reduces the overflow.
+//   selectVictim(cands)    — among elements that have such a step, whose turn
+//                            it is: worst priority first.
+//
+// Together they give the one rule the whole algorithm can be summarised by:
+//
+//   At every step, among the elements whose gentlest available step would
+//   actually reduce the overflow, degrade the one with the worst priority.
 
-import type { Priority, Role } from './spec';
+import type { Priority, Role } from '../spec';
 
-export type Rung = 'SHRINK_STEP' | 'TRUNCATE_LINE' | 'ELLIPSIS' | 'REFLOW' | 'DROP';
+export type Rung =
+  | 'SHRINK_STEP' // scale down by 10% of the ideal→floor range (text/button font, image size)
+  | 'ELLIPSIS' // text: allow cutting what doesn't fit in the current line budget, with "…"
+  | 'TRUNCATE_LINE' // text: one line fewer (content cut with "…")
+  | 'REFLOW' // move to a later slot in the template's preference list for its role
+  | 'DROP'; // remove from the layout
 
-export type DropReason =
-  | 'not-in-ambition' // this template/scale never attempted the role at all
-  | 'exhausted-ladder' // every rung was applied and it still didn't fit
-  | 'surface-too-small'; // the final constrained-status fallback (§10.5)
+// Elements only ever leave a layout for one reason now: the space ran out
+// and every gentler step had been exhausted or would not have helped. There
+// is no size-class table that excludes roles up front.
+export type DropReason = 'insufficient-space';
 
-// The subset of an element's live allocation state that the ladder logic
-// needs to decide "what's next." Kept as a plain interface (rather than
-// passing the whole element + surface) so this function has no dependency
-// on how the resolver represents state internally — it is easy to unit
-// test in isolation, which is exactly what tests/degradation.spec.ts does.
+// The subset of an element's live allocation state the ladder needs.
 export interface DegradableState {
   readonly degradability: 'fixed' | 'shrinkable' | 'droppable';
   readonly isText: boolean;
-  readonly isScan: boolean; // scan elements skip SHRINK_STEP entirely — see §8.4
-  readonly atFloor: boolean; // current size already at its hard floor
-  readonly linesAboveOne: boolean; // text only: current maxLines still > 1
-  readonly ellipsisApplied: boolean;
-  readonly zonesRemaining: boolean; // more zones left to try in rolePreference
+  // Current scale already at its hard floor. For a scan target that is its
+  // module floor — below it, it stops scanning — so it shrinks no further.
+  readonly atFloor: boolean;
+  readonly canCut: boolean; // text only: content may not be cut yet
+  readonly linesAboveOne: boolean; // text only: current line budget still > 1
+  readonly zonesRemaining: boolean; // a later slot exists in its role preference
 }
 
-// Walks one element's ladder by exactly one rung, given its current state.
-// Each ladder is expressed as a sequence of guards rather than a table,
-// because the "*" (repeatable) rungs in §10.1 aren't really repetitions of
-// a step — they're just "keep returning SHRINK_STEP until atFloor becomes
-// true," which a guard expresses more directly than a queue of enum values
-// would.
-export function nextRung(state: DegradableState): Rung | null {
-  // A QR code below its module floor isn't a smaller QR, it's a broken one
-  // (§8.4) — so scan elements never receive SHRINK_STEP at all, and go
-  // straight to reflow-then-drop.
-  if (!state.isScan && !state.atFloor) return 'SHRINK_STEP';
-
-  // TRUNCATE_LINE exists for shrinkable and droppable text, not fixed text
-  // (a fixed element, e.g. the CTA, has no line count to truncate in this
-  // creative, but the rule is general: fixed never loses content, only size).
-  if (state.isText && state.degradability !== 'fixed' && state.linesAboveOne) {
-    return 'TRUNCATE_LINE';
-  }
-
-  // ELLIPSIS is shrinkable-only. A droppable element skips straight from
-  // truncation to reflow-then-drop; losing it outright is an acceptable
-  // outcome for a droppable element, so there is no need to soften the cut
-  // with an ellipsis first.
-  if (state.isText && state.degradability === 'shrinkable' && !state.ellipsisApplied) {
-    return 'ELLIPSIS';
-  }
-
-  if (state.zonesRemaining) return 'REFLOW';
-
-  if (state.degradability === 'droppable') return 'DROP';
-
-  // fixed and shrinkable ladders end here — this element is never dropped,
-  // no matter how small the surface gets. If it still overflows, that
-  // overflow becomes the caller's problem (§10.5, the 'constrained' status).
-  return null;
+// Every step still available to an element, gentlest first. The order is
+// the ladder:
+//
+//   SHRINK_STEP* → ELLIPSIS → TRUNCATE_LINE* → REFLOW → DROP
+//
+//   fixed       may shrink and move, never loses content, never dropped
+//   shrinkable  may also cut text (ellipsis, fewer lines), never dropped
+//   droppable   may do all of the above and, last, be removed
+export function availableRungs(state: DegradableState): Rung[] {
+  const rungs: Rung[] = [];
+  if (!state.atFloor) rungs.push('SHRINK_STEP');
+  const mayCutText = state.isText && state.degradability !== 'fixed';
+  if (mayCutText && state.canCut) rungs.push('ELLIPSIS');
+  if (mayCutText && state.linesAboveOne) rungs.push('TRUNCATE_LINE');
+  if (state.zonesRemaining) rungs.push('REFLOW');
+  if (state.degradability === 'droppable') rungs.push('DROP');
+  return rungs;
 }
 
-// Suffer-first tiebreak used only when two candidates share both priority
-// and rungs-already-applied (BUILD_SPEC.md §10.3 step 3). Lower index =
-// picked as victim earlier. This list is a real design decision — e.g.
-// `incentive` (the promo badge) is judged less essential than `scan` (the
-// QR) when both are otherwise tied, so it ranks first. It is fixed and
-// total over every `Role` so the sort is always deterministic.
-const ROLE_SUFFER_RANK: Readonly<Record<Role, number>> = {
+// Tiebreak used only when two candidates share both priority and number of
+// steps already taken. Lower = degraded earlier. Total over every Role so the
+// ordering is always deterministic.
+export const ROLE_SUFFER_RANK: Readonly<Record<Role, number>> = {
   legal: 0,
   incentive: 1,
   scan: 2,
@@ -81,31 +73,39 @@ const ROLE_SUFFER_RANK: Readonly<Record<Role, number>> = {
   primary: 7,
 };
 
+// How severe a step is, gentlest first — the ladder order itself.
+export const RUNG_SEVERITY: Readonly<Record<Rung, number>> = {
+  SHRINK_STEP: 0,
+  ELLIPSIS: 1,
+  TRUNCATE_LINE: 2,
+  REFLOW: 3,
+  DROP: 4,
+};
+
 export interface DegradationCandidate {
   readonly id: string;
   readonly role: Role;
   readonly priority: Priority;
+  // The step this candidate would take (its gentlest helpful one).
+  readonly rung: Rung;
   readonly rungsApplied: number;
 }
 
-// selectVictim (§10.3). `candidates` must already be filtered by the caller
-// to elements that (a) occupy a currently-overflowing zone and (b) have at
-// least one rung remaining — this function only does the ordering, so that
-// ordering logic is unit-testable independent of overflow detection.
-//
-// The invariant this produces, stated once so it can be quoted verbatim:
-// "No element of priority P has a rung applied while any element of
-// priority greater than P still has a rung remaining." Sorting by priority
-// DESCENDING first is what guarantees it; the two tiebreaks only decide
-// order *within* a priority band, so they can never violate it.
+// Orders candidates and returns whose turn it is:
+//   1. worst priority first (priority 5 before priority 1),
+//   2. then the gentlest proposed step (among equal priorities, shrinking
+//      one element is tried before dropping another outright),
+//   3. then the one that has taken fewer steps (spreads the pain),
+//   4. then ROLE_SUFFER_RANK.
+// `candidates` must already be filtered to elements that have a step which
+// reduces the overflow — this function only orders them.
 export function selectVictim<C extends DegradationCandidate>(candidates: readonly C[]): C | null {
   if (candidates.length === 0) return null;
-
   const sorted = [...candidates].sort((a, b) => {
     if (a.priority !== b.priority) return b.priority - a.priority;
+    if (a.rung !== b.rung) return RUNG_SEVERITY[a.rung] - RUNG_SEVERITY[b.rung];
     if (a.rungsApplied !== b.rungsApplied) return a.rungsApplied - b.rungsApplied;
     return ROLE_SUFFER_RANK[a.role] - ROLE_SUFFER_RANK[b.role];
   });
-
   return sorted[0] ?? null;
 }

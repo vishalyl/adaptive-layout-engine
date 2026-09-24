@@ -1,13 +1,12 @@
-// Phase 7 — the invariant checker (§11). This runs on EVERY resolve, not
+// Phase 9 — the invariant checker. This runs on EVERY resolve, not
 // just in tests: the guarantee has to live in a layer below the logic that
 // might regress it, the same instinct as a database-level constraint
 // backing application logic rather than trusting every caller to get it
 // right.
 //
-// A note on the signature: BUILD_SPEC.md §11 describes `validateLayout` as
-// taking just `(layout)`. In practice a `ResolvedLayout` deliberately does
-// NOT carry each element's original `type` or type-specific fields (§5.5 —
-// that is precisely what keeps `LayoutEntry` a clean, guess-free contract
+// A note on the signature: the natural design would have `validateLayout`
+// take just `(layout)`. But a `ResolvedLayout` deliberately does NOT carry
+// each element's original `type` or type-specific fields (that is precisely what keeps `LayoutEntry` a clean, guess-free contract
 // for a renderer). But three of the seven checks below (tap target, text
 // floor, scan integrity) need to know whether an element is a button, text,
 // or scan, and a scan element's own module floor. Rather than smuggle that
@@ -15,10 +14,11 @@
 // `AdSpec` it was resolved against, purely to cross-reference by id. It
 // remains a pure function of its two arguments.
 
-import type { AdElement, AdSpec } from './spec';
-import type { LayoutEntry, NormalisedSurface, PlacedElement, ResolvedLayout } from './resolver';
+import type { AdElement, AdSpec } from '../spec';
+import type { LayoutEntry, NormalisedSurface, PlacedElement, ResolvedLayout } from '../resolver';
 import type { Violation } from './diagnostics';
 import { EPSILON, rectContains, rectIntersects } from './types';
+import { contrastRatio, evaluateContrast } from './contrast';
 
 // Only the two fields validateLayout actually reads. Typed as a `Pick` of
 // the real `ResolvedLayout` (rather than a hand-rolled shape) so any full
@@ -146,9 +146,9 @@ function checkTextFloor(placed: readonly PlacedElement[], surface: NormalisedSur
 }
 
 // Check 6 — scan integrity. A placed scan element must meet its own
-// modules × minModulePx floor — see the `isScan` short-circuit in
-// degradation.ts and the cross-axis-clamp exemption in resolver.ts; this is
-// the check that confirms those two mechanisms actually held.
+// modules × minModulePx floor. A QR may start bigger and shrink under
+// pressure, but only to that floor (scanDemand in resolver.ts); this is the
+// check that confirms the floor actually held.
 function checkScanIntegrity(placed: readonly PlacedElement[], specById: ReadonlyMap<string, AdElement>): Violation[] {
   const violations: Violation[] = [];
   for (const entry of placed) {
@@ -167,6 +167,38 @@ function checkScanIntegrity(placed: readonly PlacedElement[], specById: Readonly
   return violations;
 }
 
+// Check 7 — contrast. Every placed element that declared a mark colour must
+// clear the surface's contrast floor against what is actually behind its
+// final rect — or, if the resolver plated it, against that plate. Recomputed
+// here from the spec and surface rather than trusting the resolver's own
+// `contrast` field, the same independence every other check keeps.
+function checkContrast(
+  placed: readonly PlacedElement[],
+  specById: ReadonlyMap<string, AdElement>,
+  spec: AdSpec,
+  surface: NormalisedSurface,
+): Violation[] {
+  const violations: Violation[] = [];
+  for (const entry of placed) {
+    const el = specById.get(entry.id);
+    if (!el || el.type !== 'image' || el.markColor === undefined) continue;
+    const required = surface.minContrastRatio;
+    const plate = entry.contrast?.plate ?? null;
+    const ratio = plate
+      ? contrastRatio(el.markColor, plate)
+      : evaluateContrast(el.markColor, entry.rect, surface.backdrops, spec.background ?? null, required)?.ratio;
+    if (ratio !== undefined && ratio < required - 1e-6) {
+      violations.push({
+        kind: 'contrast',
+        severity: 'error',
+        message: `"${entry.id}" has ${ratio.toFixed(2)}:1 contrast, below the ${required}:1 floor.`,
+        elementIds: [entry.id],
+      });
+    }
+  }
+  return violations;
+}
+
 export function validateLayout(spec: AdSpec, layout: ValidatableLayout): Violation[] {
   const placed = placedEntries(layout.elements);
   const specById = new Map(spec.elements.map((el) => [el.id, el]));
@@ -178,5 +210,6 @@ export function validateLayout(spec: AdSpec, layout: ValidatableLayout): Violati
     ...checkTapTarget(placed, specById, layout.surface),
     ...checkTextFloor(placed, layout.surface),
     ...checkScanIntegrity(placed, specById),
+    ...checkContrast(placed, specById, spec, layout.surface),
   ];
 }

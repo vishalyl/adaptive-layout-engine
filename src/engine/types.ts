@@ -91,7 +91,7 @@ export function insetRect(rect: Rect, insets: Insets): Rect {
 }
 
 // Splits a rect into adjacent sub-rects along one axis, sized proportionally
-// to `fractions`. Used by templates (§9) to partition a surface's usable
+// to `fractions`. Used to partition a surface's usable
 // rect into named zones — e.g. a 20/58/22 split for a lead/body/tail band.
 //
 // Fractions are normalised (divided by their own sum) rather than required

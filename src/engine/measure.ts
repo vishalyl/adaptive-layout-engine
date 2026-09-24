@@ -1,5 +1,5 @@
 // Text measurement, injected rather than imported, so the engine can stay
-// DOM-free (§15.2 of BUILD_SPEC.md). `resolve()` takes a `TextMeasurer` as a
+// DOM-free. `resolve()` takes a `TextMeasurer` as a
 // parameter with `estimateMeasurer` as the default — that keeps `resolve`
 // a pure function of its arguments, which is what makes it testable without
 // a browser.
@@ -18,7 +18,7 @@ export interface TextMeasurer {
 }
 
 // Calibrated against Archivo-ish proportional sans at typical weights. This
-// is deliberately the "standard shortcut" BUILD_SPEC.md §15.1 warns is
+// is deliberately the "standard shortcut" that is
 // wrong enough to cause visible overflow at large font sizes — it is here as
 // the DOM-free fallback and the deterministic value tests run against, not
 // as the final word on layout quality. The canvas measurer replaces it at

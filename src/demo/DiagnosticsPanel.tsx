@@ -1,4 +1,4 @@
-// §14.5 — the diagnostics panel. Renders `diagnostics.decisions` as a
+// The diagnostics panel. Renders `diagnostics.decisions` as a
 // readable timeline, lists dropped elements with their reasons, and offers
 // a "Copy trace" button so the full trace can be pasted somewhere else
 // during a live interview. This is what turns "why did this element end up
@@ -7,7 +7,7 @@
 // to narrate.
 
 import { useState } from 'react';
-import type { ResolvedLayout } from '../engine/resolver';
+import type { ResolvedLayout } from '../resolver';
 import { InfoTooltip } from './InfoTooltip';
 
 export interface DiagnosticsPanelProps {
@@ -23,9 +23,7 @@ export interface DiagnosticsPanelProps {
 }
 
 const DROP_REASON_LABEL: Record<string, string> = {
-  'not-in-ambition': 'not attempted at this scale',
-  'exhausted-ladder': 'degradation ladder exhausted',
-  'surface-too-small': 'surface too small',
+  'insufficient-space': 'no room — every gentler step was used up or wouldn’t help',
 };
 
 export function DiagnosticsPanel({ layout, benchmarkStats, onRunBenchmark, benchmarking, stressResult, onStressTest, stressRunning }: DiagnosticsPanelProps) {
@@ -81,7 +79,7 @@ export function DiagnosticsPanel({ layout, benchmarkStats, onRunBenchmark, bench
         <div className="drops">
           <h3>
             Dropped <span className="count-tag">{dropped.length}</span>
-            <InfoTooltip text="Elements not shown, and why: either never attempted at this scale, or they lost every rung of the degradation ladder and were removed as a last resort." />
+            <InfoTooltip text="Elements not shown. Every element is attempted; one is only dropped when the space runs out, its gentler steps are used up or wouldn't help, and nothing of worse priority could have helped instead." />
           </h3>
           <ul className="drops-list">
             {dropped.map((e) => (

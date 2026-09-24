@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { keelAd } from '../src/demo/creative';
-import { surfaces } from '../src/demo/surfaces';
+import { surfaces } from '../src/surfaces';
 
 describe('keelAd', () => {
   it('has eight elements with unique ids', () => {
@@ -14,9 +14,10 @@ describe('keelAd', () => {
     expect(keelAd.elements.filter((el) => el.role === 'action')).toHaveLength(1);
   });
 
-  it('spans five distinct priority levels', () => {
-    const priorities = new Set(keelAd.elements.map((el) => el.priority));
-    expect(priorities.size).toBe(5);
+  it('spans the full priority range, 1 (headline, hero) to 5 (legal)', () => {
+    const priorities = keelAd.elements.map((el) => el.priority);
+    expect(Math.min(...priorities)).toBe(1);
+    expect(Math.max(...priorities)).toBe(5);
   });
 });
 

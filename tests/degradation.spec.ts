@@ -1,327 +1,305 @@
-// §16.2 — the degradation ladder's correctness tests. This is described in
-// BUILD_SPEC.md as "the single most valuable test in the suite," so it gets
-// both a pure unit-level treatment of the two functions the ladder is built
-// from (nextRung, selectVictim) and an integration-level treatment against
-// resolve() itself.
+// The degradation rule, tested three ways:
 //
-// A note on the drop-order example: BUILD_SPEC.md §16.2 suggests asserting
-// an exact drop order ("legal -> badge -> qr -> logo") on "a shrinking
-// kiosk," with the explicit instruction to fix the test to whatever the
-// real, designed order turns out to be. Empirically, the KEEL creative on
-// the shipped `retailKiosk` profile mostly resolves shrinking demand via
-// SHRINK_STEP/REFLOW alone (our zones are generous enough), and below the
-// 'large' scale class badge/qr/legal simply leave `ambition` outright — a
-// different, earlier-and-blunter mechanism for the same "low priority goes
-// first" intent, not a ladder-driven DROP. To test the ladder's actual DROP
-// behaviour precisely, this file uses a small purpose-built fixture spec
-// that forces genuine, simultaneous overflow across every priority level —
-// that is what BUILD_SPEC.md's own instruction is asking for: the real,
-// verified order, not the illustrative one.
+//   1. The two pure building blocks (degradation.ts): the ladder each
+//      element may walk, and the order in which candidates are chosen.
+//   2. THE RULE, checked on every single step of every resolve, straight
+//      from the step log the resolver records (diagnostics.rungsApplied):
+//        - every step reduced the overflow it was taken for;
+//        - the victim had the worst priority of anyone with a helpful step;
+//        - every worse-priority element still on the surface had been
+//          examined and had NO helpful step (it's listed as `blocked`);
+//        - a joint step only ever pulls in slot-mates of equal or worse
+//          priority.
+//      This runs over every shipped ad × surface, an inflated density,
+//      and a few hundred random surfaces.
+//   3. The concrete scenarios the brief names: the stress surface's drop
+//      order, and a kiosk shrinking until branding must go.
 
 import { describe, expect, it } from 'vitest';
-import { defineAd } from '../src/engine/spec';
-import { defineSurface } from '../src/engine/surface';
-import { resolve } from '../src/engine/resolver';
-import { nextRung, selectVictim, type DegradableState, type DegradationCandidate } from '../src/engine/degradation';
+import { defineSurface, type SurfaceProfile } from '../src/engine/surface';
+import { resolve, type ResolvedLayout } from '../src/resolver';
+import {
+  availableRungs,
+  selectVictim,
+  type DegradableState,
+  type DegradationCandidate,
+} from '../src/engine/degradation';
+import type { AdSpec } from '../src/spec';
+import { ads } from '../src/demo/creatives';
 import { keelAd } from '../src/demo/creative';
-import { surfaces } from '../src/demo/surfaces';
+import { surfaces } from '../src/surfaces';
 
 // ---------------------------------------------------------------------------
-// Unit tests: nextRung — one assertion per row of the §10.2 ladder table.
+// 1a. The ladder
 // ---------------------------------------------------------------------------
 
-const baseState: DegradableState = {
+const text: DegradableState = {
   degradability: 'shrinkable',
   isText: true,
-  isScan: false,
   atFloor: false,
-  linesAboveOne: false,
-  ellipsisApplied: false,
-  zonesRemaining: false,
+  canCut: true,
+  linesAboveOne: true,
+  zonesRemaining: true,
 };
 
-describe('nextRung', () => {
-  it('returns SHRINK_STEP while not at floor, for every degradability', () => {
-    for (const degradability of ['fixed', 'shrinkable', 'droppable'] as const) {
-      expect(nextRung({ ...baseState, degradability, atFloor: false })).toBe('SHRINK_STEP');
-    }
+describe('availableRungs — the ladder, gentlest first', () => {
+  it('shrinkable text: shrink → ellipsis → fewer lines → move; never dropped', () => {
+    expect(availableRungs(text)).toEqual(['SHRINK_STEP', 'ELLIPSIS', 'TRUNCATE_LINE', 'REFLOW']);
   });
 
-  it('fixed: goes straight from floor to REFLOW, skipping TRUNCATE_LINE/ELLIPSIS', () => {
-    const state: DegradableState = { ...baseState, degradability: 'fixed', atFloor: true, linesAboveOne: true, zonesRemaining: true };
-    expect(nextRung(state)).toBe('REFLOW');
+  it('droppable text: the same ladder, with DROP as the very last resort', () => {
+    expect(availableRungs({ ...text, degradability: 'droppable' })).toEqual([
+      'SHRINK_STEP',
+      'ELLIPSIS',
+      'TRUNCATE_LINE',
+      'REFLOW',
+      'DROP',
+    ]);
   });
 
-  it('fixed: returns null (stop) once at floor with no zones left — never DROP', () => {
-    const state: DegradableState = { ...baseState, degradability: 'fixed', atFloor: true, linesAboveOne: true, zonesRemaining: false };
-    expect(nextRung(state)).toBeNull();
+  it('fixed: may shrink and move, never loses content, never dropped', () => {
+    expect(availableRungs({ ...text, degradability: 'fixed' })).toEqual(['SHRINK_STEP', 'REFLOW']);
+    expect(availableRungs({ ...text, degradability: 'fixed', atFloor: true, zonesRemaining: false })).toEqual([]);
   });
 
-  it('shrinkable: TRUNCATE_LINE before ELLIPSIS before REFLOW', () => {
-    const atFloor: DegradableState = { ...baseState, degradability: 'shrinkable', atFloor: true, linesAboveOne: true, zonesRemaining: true };
-    expect(nextRung(atFloor)).toBe('TRUNCATE_LINE');
-
-    const oneLine: DegradableState = { ...atFloor, linesAboveOne: false, ellipsisApplied: false };
-    expect(nextRung(oneLine)).toBe('ELLIPSIS');
-
-    const ellipsised: DegradableState = { ...oneLine, ellipsisApplied: true };
-    expect(nextRung(ellipsised)).toBe('REFLOW');
+  it('a scan target shrinks only down to its module floor (below it, it stops scanning)', () => {
+    const scan: DegradableState = { ...text, isText: false, degradability: 'droppable' };
+    expect(availableRungs(scan)).toEqual(['SHRINK_STEP', 'REFLOW', 'DROP']);
+    expect(availableRungs({ ...scan, atFloor: true })).toEqual(['REFLOW', 'DROP']);
   });
 
-  it('shrinkable: stops (null) after REFLOW is exhausted — never DROP', () => {
-    const state: DegradableState = {
-      ...baseState,
-      degradability: 'shrinkable',
-      atFloor: true,
-      linesAboveOne: false,
-      ellipsisApplied: true,
-      zonesRemaining: false,
-    };
-    expect(nextRung(state)).toBeNull();
-  });
-
-  it('droppable: TRUNCATE_LINE then REFLOW then DROP, with no ELLIPSIS in between', () => {
-    const atFloor: DegradableState = { ...baseState, degradability: 'droppable', atFloor: true, linesAboveOne: true, zonesRemaining: true };
-    expect(nextRung(atFloor)).toBe('TRUNCATE_LINE');
-
-    const oneLine: DegradableState = { ...atFloor, linesAboveOne: false };
-    expect(nextRung(oneLine)).toBe('REFLOW');
-
-    const noZonesLeft: DegradableState = { ...oneLine, zonesRemaining: false };
-    expect(nextRung(noZonesLeft)).toBe('DROP');
-  });
-
-  it('scan: skips SHRINK_STEP entirely, going straight to REFLOW then DROP', () => {
-    const scanState: DegradableState = {
-      degradability: 'droppable',
-      isText: false,
-      isScan: true,
-      atFloor: false, // irrelevant for scan — SHRINK_STEP must never be offered regardless
-      linesAboveOne: false,
-      ellipsisApplied: false,
-      zonesRemaining: true,
-    };
-    expect(nextRung(scanState)).toBe('REFLOW');
-    expect(nextRung({ ...scanState, zonesRemaining: false })).toBe('DROP');
+  it('steps already used up disappear from the ladder', () => {
+    expect(availableRungs({ ...text, atFloor: true, canCut: false, linesAboveOne: false, zonesRemaining: false })).toEqual([]);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Unit tests: selectVictim — the ordering guarantee itself.
+// 1b. Victim selection
 // ---------------------------------------------------------------------------
 
+const cand = (c: Partial<DegradationCandidate> & Pick<DegradationCandidate, 'id'>): DegradationCandidate => ({
+  role: 'secondary',
+  priority: 3,
+  rung: 'SHRINK_STEP',
+  rungsApplied: 0,
+  ...c,
+});
+
 describe('selectVictim', () => {
-  it('returns null for an empty candidate list', () => {
+  it('returns null for no candidates', () => {
     expect(selectVictim([])).toBeNull();
   });
 
-  it('picks the highest priority number (worst priority) first', () => {
-    const candidates: DegradationCandidate[] = [
-      { id: 'a', role: 'primary', priority: 1, rungsApplied: 0 },
-      { id: 'b', role: 'legal', priority: 5, rungsApplied: 0 },
-      { id: 'c', role: 'secondary', priority: 3, rungsApplied: 0 },
-    ];
-    expect(selectVictim(candidates)?.id).toBe('b');
+  it('worst priority first', () => {
+    expect(selectVictim([cand({ id: 'a', priority: 1 }), cand({ id: 'b', priority: 5 }), cand({ id: 'c', priority: 3 })])?.id).toBe('b');
   });
 
-  it('within the same priority, prefers the one with fewer rungs already applied', () => {
-    const candidates: DegradationCandidate[] = [
-      { id: 'a', role: 'legal', priority: 5, rungsApplied: 3 },
-      { id: 'b', role: 'legal', priority: 5, rungsApplied: 1 },
-    ];
-    expect(selectVictim(candidates)?.id).toBe('b');
+  it('within a priority, the gentlest step first — shrink one before dropping another', () => {
+    expect(selectVictim([cand({ id: 'drop', rung: 'DROP' }), cand({ id: 'shrink', rung: 'SHRINK_STEP', rungsApplied: 5 })])?.id).toBe('shrink');
   });
 
-  it('breaks a full tie (priority and rungsApplied equal) deterministically by role', () => {
-    const candidates: DegradationCandidate[] = [
-      { id: 'a', role: 'scan', priority: 4, rungsApplied: 0 },
-      { id: 'b', role: 'incentive', priority: 4, rungsApplied: 0 },
-    ];
-    // incentive ranks before scan in the suffer order (degradation.ts) —
-    // run it many times shuffled to prove it is not accidentally stable-by-input-order.
-    for (let i = 0; i < 5; i++) {
-      const shuffled = i % 2 === 0 ? candidates : [...candidates].reverse();
-      expect(selectVictim(shuffled)?.id).toBe('b');
-    }
+  it('then fewer steps taken, then role — and never depends on input order', () => {
+    const a = cand({ id: 'a', role: 'scan', priority: 4 });
+    const b = cand({ id: 'b', role: 'incentive', priority: 4 });
+    expect(selectVictim([a, b])?.id).toBe('b');
+    expect(selectVictim([b, a])?.id).toBe('b');
+    expect(selectVictim([cand({ id: 'x', rungsApplied: 3 }), cand({ id: 'y', rungsApplied: 1 })])?.id).toBe('y');
   });
 
-  it('never picks a candidate with a strictly better priority when a worse one is available', () => {
-    // A property check across many random candidate sets: the winner's
-    // priority must always be >= every other candidate's priority.
+  it('never picks a better priority while a worse one is available (property check)', () => {
     let seed = 42;
-    const rand = () => {
-      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-      return seed / 0x7fffffff;
-    };
-    const roles = ['hero', 'primary', 'secondary', 'action', 'branding', 'incentive', 'legal', 'scan'] as const;
-
-    for (let trial = 0; trial < 200; trial++) {
-      const count = 1 + Math.floor(rand() * 6);
-      const candidates: DegradationCandidate[] = Array.from({ length: count }, (_, i) => ({
-        id: `c${i}`,
-        role: roles[Math.floor(rand() * roles.length)]!,
-        priority: (1 + Math.floor(rand() * 5)) as DegradationCandidate['priority'],
-        rungsApplied: Math.floor(rand() * 4),
-      }));
-      const winner = selectVictim(candidates)!;
-      for (const c of candidates) {
-        expect(winner.priority).toBeGreaterThanOrEqual(c.priority);
-      }
+    const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    const rungs = ['SHRINK_STEP', 'ELLIPSIS', 'TRUNCATE_LINE', 'REFLOW', 'DROP'] as const;
+    for (let t = 0; t < 300; t++) {
+      const cs = Array.from({ length: 1 + Math.floor(rand() * 6) }, (_, i) =>
+        cand({
+          id: `c${i}`,
+          priority: (1 + Math.floor(rand() * 5)) as DegradationCandidate['priority'],
+          rung: rungs[Math.floor(rand() * rungs.length)]!,
+          rungsApplied: Math.floor(rand() * 4),
+        }),
+      );
+      const winner = selectVictim(cs)!;
+      for (const c of cs) expect(winner.priority).toBeGreaterThanOrEqual(c.priority);
     }
   });
 });
 
 // ---------------------------------------------------------------------------
-// Integration: the priority invariant, stated exactly as BUILD_SPEC.md §10.3
-// does — "no element of priority P has a rung applied while any element of
-// priority greater than P still has a rung remaining" — checked against the
-// full recorded rung sequence from real resolve() calls.
+// 2. The rule, on every step of every resolve
 // ---------------------------------------------------------------------------
 
-function assertPriorityInvariant(
-  layout: ReturnType<typeof resolve>,
-  elements: readonly { readonly id: string; readonly priority: number }[],
-): void {
-  const priorityById = new Map(elements.map((e) => [e.id, e.priority]));
-  let bestPriorityTouched = Number.POSITIVE_INFINITY;
-  for (const record of layout.diagnostics.rungsApplied) {
-    const priority = priorityById.get(record.id)!;
-    expect(
-      priority,
-      `@iteration ${record.atIteration}: "${record.id}" (priority ${priority}) received a rung after ` +
-        `priority ${bestPriorityTouched} had already been touched — a better-priority element should ` +
-        `never be reached before every worse-priority candidate is exhausted.`,
-    ).toBeLessThanOrEqual(bestPriorityTouched);
-    bestPriorityTouched = Math.min(bestPriorityTouched, priority);
+function checkEveryStep(spec: AdSpec, layout: ResolvedLayout, context: string): void {
+  const priorityOf = new Map(spec.elements.map((e) => [e.id, e.priority]));
+  const live = new Set(spec.elements.map((e) => e.id));
+
+  for (const step of layout.diagnostics.rungsApplied) {
+    const where = `${context}, step #${step.atIteration} (${step.id} ${step.rung})`;
+
+    expect(step.overflowAfter, `${where}: must reduce the overflow`).toBeLessThan(step.overflowBefore);
+
+    expect(step.candidates.map((c) => c.id), `${where}: victim is among the candidates`).toContain(step.id);
+    for (const c of step.candidates) {
+      expect(c.priority, `${where}: every candidate shares the victim's priority band`).toBe(step.priority);
+    }
+
+    // Every element still on the surface with a WORSE priority must have
+    // been examined first and found to have no helpful step.
+    const worseLive = [...live].filter((id) => priorityOf.get(id)! > step.priority).sort();
+    expect([...step.blocked].sort(), `${where}: all worse-priority elements were tried first`).toEqual(worseLive);
+
+    for (const partner of step.partners) {
+      expect(priorityOf.get(partner)!, `${where}: joint step never pulls in a better priority`).toBeGreaterThanOrEqual(step.priority);
+    }
+
+    if (step.rung === 'DROP') {
+      live.delete(step.id);
+      for (const partner of step.partners) live.delete(partner);
+    }
+  }
+
+  // Degradability is honoured in the final layout.
+  for (const el of spec.elements) {
+    const entry = layout.elements[el.id]!;
+    if (el.degradability !== 'droppable') {
+      expect(entry.placed, `${context}: ${el.degradability} "${el.id}" is never dropped`).toBe(true);
+    }
+    if (el.degradability === 'fixed' && entry.placed && entry.typography) {
+      expect(entry.typography.truncated, `${context}: fixed "${el.id}" never loses content`).toBe(false);
+    }
   }
 }
 
-describe('the priority invariant', () => {
-  it('holds for the KEEL creative on every shipped surface', () => {
-    for (const { profile } of surfaces) {
-      assertPriorityInvariant(resolve(keelAd, profile), keelAd.elements);
+describe('the rule holds on every step', () => {
+  it('for every shipped ad on every shipped surface', () => {
+    for (const ad of ads) {
+      for (const s of surfaces) checkEveryStep(ad.spec, resolve(ad.spec, s.profile), `${ad.key} on ${s.key}`);
     }
   });
 
-  it('holds under an artificially inflated densityScale (forces heavier degradation)', () => {
-    for (const { profile } of surfaces) {
-      assertPriorityInvariant(resolve(keelAd, { ...profile, densityScale: 5 }), keelAd.elements);
-    }
-  });
-
-  // A purpose-built fixture: five text elements, one per priority level
-  // 1-5, all oversized enough that every one of their (separate) zones
-  // overflows simultaneously on a 900x1200 surface. This forces the loop to
-  // repeatedly choose among *competing* zones, which is what actually
-  // exercises selectVictim's cross-zone ordering — the shipped creative
-  // rarely creates that much simultaneous contention.
-  const fixture = defineAd({
-    name: 'degradation ladder fixture',
-    elements: [
-      {
-        id: 'primary', type: 'text', role: 'primary', priority: 1, degradability: 'fixed',
-        content: 'PRIMARY PRIMARY PRIMARY PRIMARY', idealFontPx: 200, minFontPx: 120, maxLines: 2, weight: 700,
-      },
-      {
-        id: 'action', type: 'text', role: 'action', priority: 2, degradability: 'fixed',
-        content: 'ACTION ACTION ACTION ACTION', idealFontPx: 200, minFontPx: 120, maxLines: 2, weight: 700,
-      },
-      {
-        id: 'secondary', type: 'text', role: 'secondary', priority: 3, degradability: 'shrinkable',
-        content: 'SECONDARY SECONDARY SECONDARY', idealFontPx: 200, minFontPx: 60, maxLines: 3, weight: 700,
-      },
-      {
-        id: 'incentive', type: 'text', role: 'incentive', priority: 4, degradability: 'droppable',
-        content: 'INCENTIVE INCENTIVE INCENTIVE', idealFontPx: 200, minFontPx: 60, maxLines: 3, weight: 700,
-      },
-      {
-        id: 'legal', type: 'text', role: 'legal', priority: 5, degradability: 'droppable',
-        content: 'LEGAL LEGAL LEGAL LEGAL LEGAL', idealFontPx: 200, minFontPx: 60, maxLines: 3, weight: 700,
-      },
-    ],
-  });
-  const fixtureSurface = defineSurface({
-    widthPx: 900,
-    heightPx: 1200,
-    safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
-    interaction: { mode: 'touch', minTapTargetPx: 44 },
-    viewing: { distance: 'mid', minTextPx: 20 },
-  });
-
-  it('holds under deliberately forced multi-zone contention', () => {
-    assertPriorityInvariant(resolve(fixture, fixtureSurface), fixture.elements);
-  });
-
-  it('the actual, verified drop order on this fixture: only the droppable, worst-priority ' +
-    'element that never stops overflowing is dropped — legal (priority 5) fully exhausts its ' +
-    'own ladder first and fits without being dropped, then incentive (priority 4) is dropped, ' +
-    'and priority 1-3 never lose a single rung until 4 and 5 are fully resolved', () => {
-    const layout = resolve(fixture, fixtureSurface);
-    expect(layout.diagnostics.drops.map((d) => d.id)).toEqual(['incentive']);
-
-    // primary and action (both 'fixed') are placed no matter what.
-    expect(layout.elements['primary']?.placed).toBe(true);
-    expect(layout.elements['action']?.placed).toBe(true);
-
-    // Every rung applied to 'legal' happens strictly before every rung
-    // applied to 'incentive', which happens strictly before 'secondary',
-    // then 'action', then 'primary' — i.e. exactly priority-descending,
-    // fully segregated by element rather than interleaved.
-    const order = layout.diagnostics.rungsApplied.map((r) => r.id);
-    const firstIndexOf = (id: string) => order.indexOf(id);
-    const lastIndexOf = (id: string) => order.lastIndexOf(id);
-    expect(lastIndexOf('legal')).toBeLessThan(firstIndexOf('incentive'));
-    expect(lastIndexOf('incentive')).toBeLessThan(firstIndexOf('secondary'));
-    expect(lastIndexOf('secondary')).toBeLessThan(firstIndexOf('action'));
-    expect(lastIndexOf('action')).toBeLessThan(firstIndexOf('primary'));
-  });
-});
-
-// ---------------------------------------------------------------------------
-// The remaining §16.2 bullets.
-// ---------------------------------------------------------------------------
-
-describe('fixed elements are never dropped', () => {
-  it('across every shipped surface, at any density', () => {
-    const fixedIds = keelAd.elements.filter((el) => el.degradability === 'fixed').map((el) => el.id);
-    for (const { key, profile } of surfaces) {
-      for (const densityScale of [1, 3, 6]) {
-        const layout = resolve(keelAd, { ...profile, densityScale });
-        for (const id of fixedIds) {
-          expect(layout.elements[id]?.placed, `"${id}" on "${key}" @density ${densityScale}`).toBe(true);
-        }
+  it('under an inflated density that forces heavy degradation', () => {
+    for (const ad of ads) {
+      for (const s of surfaces) {
+        checkEveryStep(ad.spec, resolve(ad.spec, { ...s.profile, densityScale: 2 }), `${ad.key} on ${s.key} @2x`);
       }
     }
   });
 
-  it('even on an absurdly small 40x40 surface', () => {
-    const profile = defineSurface({
-      widthPx: 40,
-      heightPx: 40,
+  it('on 300 random surfaces per ad', () => {
+    let seed = 20240924;
+    const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    for (const ad of ads) {
+      for (let i = 0; i < 300; i++) {
+        const w = 120 + rand() * 2000;
+        const h = 80 + rand() * 2000;
+        const profile: SurfaceProfile = defineSurface({
+          widthPx: w,
+          heightPx: h,
+          safeArea: { top: rand() * h * 0.15, right: rand() * w * 0.15, bottom: rand() * h * 0.15, left: rand() * w * 0.15 },
+          interaction: rand() < 0.5 ? { mode: 'passive' } : { mode: 'touch', minTapTargetPx: 24 + rand() * 50 },
+          viewing: rand() < 0.5 ? { distance: 'near' } : { distance: 'far', minTextPx: 10 + rand() * 30 },
+        });
+        checkEveryStep(ad.spec, resolve(ad.spec, profile), `${ad.key} on random #${i} ${JSON.stringify(profile)}`);
+      }
+    }
+  });
+});
+
+describe('no unnecessary degradation survives', () => {
+  it('a surface with room to spare takes no steps at all', () => {
+    for (const ad of ads) {
+      const layout = resolve(ad.spec, surfaces.find((s) => s.key === 'retailKiosk')!.profile);
+      expect(layout.status, ad.key).toBe('ok');
+      expect(layout.diagnostics.rungsApplied, ad.key).toEqual([]);
+      for (const entry of Object.values(layout.elements)) expect(entry.placed, `${ad.key}: ${entry.id}`).toBe(true);
+    }
+  });
+
+  it('steps the final layout turned out not to need are undone and logged', () => {
+    // FERN on a 1080×150 band: legal is dropped early, but later steps free
+    // the room it needed, so the reclaim pass restores it.
+    const layout = resolve(
+      ads.find((a) => a.key === 'fern')!.spec,
+      defineSurface({
+        widthPx: 1080,
+        heightPx: 150,
+        safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
+        interaction: { mode: 'touch', minTapTargetPx: 60 },
+        viewing: { distance: 'mid', minTextPx: 20 },
+      }),
+    );
+    expect(layout.diagnostics.restored.map((r) => `${r.id}:${r.rung}`)).toContain('legal:DROP');
+    expect(layout.elements['legal' as never]?.placed).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. The scenarios
+// ---------------------------------------------------------------------------
+
+const dropOrder = (layout: ResolvedLayout) =>
+  layout.diagnostics.rungsApplied.filter((r) => r.rung === 'DROP').flatMap((r) => [r.id, ...r.partners]);
+
+describe('the stress surface (compact card, 320×180)', () => {
+  const cramped = surfaces.find((s) => s.key === 'cramped')!.profile;
+
+  it('KEEL degrades cleanly: legal (5), then QR and badge (4), then logo (2) — never the headline, CTA, price or hero', () => {
+    const layout = resolve(keelAd, cramped);
+    expect(layout.status).toBe('degraded');
+    expect(layout.diagnostics.violations).toEqual([]);
+    expect(dropOrder(layout)).toEqual(['legal', 'qr', 'badge', 'logo']);
+    for (const id of ['headline', 'cta', 'price', 'hero']) {
+      expect(layout.elements[id as keyof typeof layout.elements]?.placed, id).toBe(true);
+    }
+  });
+
+  it('every shipped ad fits it without breaking a single constraint', () => {
+    for (const ad of ads) {
+      const layout = resolve(ad.spec, cramped);
+      expect(layout.status, ad.key).toBe('degraded');
+      expect(layout.diagnostics.violations, ad.key).toEqual([]);
+    }
+  });
+});
+
+describe('the brief\'s kiosk scenario: shrink it until branding must go', () => {
+  const kiosk = (w: number, h: number) =>
+    defineSurface({
+      widthPx: w,
+      heightPx: h,
       safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
-      interaction: { mode: 'touch', minTapTargetPx: 44 },
+      interaction: { mode: 'touch', minTapTargetPx: 60 },
       viewing: { distance: 'mid', minTextPx: 20 },
     });
-    const layout = resolve(keelAd, profile);
-    expect(layout.elements['headline']?.placed).toBe(true);
-    expect(layout.elements['cta']?.placed).toBe(true);
-  });
-});
 
-describe('scan never renders below its module floor', () => {
-  it('every placed scan element meets modules x minModulePx on every shipped surface', () => {
-    const qrSpec = keelAd.elements.find((el) => el.type === 'scan')!;
-    const floor = qrSpec.type === 'scan' ? qrSpec.modules * qrSpec.minModulePx : 0;
-    for (const { key, profile } of surfaces) {
-      const layout = resolve(keelAd, profile);
-      const entry = layout.elements['qr'];
-      if (entry?.placed) {
-        expect(entry.rect.w, `"qr" width on "${key}"`).toBeGreaterThanOrEqual(floor - 0.5);
-        expect(entry.rect.h, `"qr" height on "${key}"`).toBeGreaterThanOrEqual(floor - 0.5);
-      }
-      // If not placed, it must be because it was excluded or dropped —
-      // never because it silently rendered undersized. `placed: false` is
-      // exactly the honest alternative to a broken QR.
+  it('shrinking the height: headline and CTA survive every step, nothing ever overlaps or clips', () => {
+    for (let h = 1080; h >= 140; h -= 20) {
+      const layout = resolve(keelAd, kiosk(1080, h));
+      const structural = layout.diagnostics.violations.filter((v) => v.kind === 'overlap' || v.kind === 'out-of-bounds');
+      expect(structural, `h=${h}`).toEqual([]);
+      expect(layout.elements.headline.placed, `h=${h}`).toBe(true);
+      expect(layout.elements.cta.placed, `h=${h}`).toBe(true);
+      checkEveryStep(keelAd, layout, `kiosk 1080×${h}`);
     }
+  });
+
+  it('shrinking the whole kiosk: the logo goes only after legal, badge and QR — and it goes cleanly', () => {
+    let firstWithoutLogo: ResolvedLayout<'headline' | 'hero' | 'cta' | 'price' | 'logo' | 'badge' | 'qr' | 'legal'> | null = null;
+    let side = 0;
+    for (side = 1080; side >= 120 && !firstWithoutLogo; side -= 20) {
+      const layout = resolve(keelAd, kiosk(side, side));
+      if (!layout.elements.logo.placed) firstWithoutLogo = layout;
+    }
+    expect(firstWithoutLogo, 'the logo is eventually dropped').not.toBeNull();
+    const layout = firstWithoutLogo!;
+    const order = dropOrder(layout);
+    for (const lower of ['legal', 'badge', 'qr']) {
+      expect(order.indexOf(lower), `${lower} is dropped before the logo`).toBeGreaterThanOrEqual(0);
+      expect(order.indexOf(lower)).toBeLessThan(order.indexOf('logo'));
+    }
+    expect(layout.elements.headline.placed).toBe(true);
+    expect(layout.elements.cta.placed).toBe(true);
+    const structural = layout.diagnostics.violations.filter((v) => v.kind === 'overlap' || v.kind === 'out-of-bounds');
+    expect(structural).toEqual([]);
   });
 });

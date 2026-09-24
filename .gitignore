@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local planning notes stay local: only README.md and ARCHITECTURE.md are published
+*.md
+!README.md
+!ARCHITECTURE.md
+*.docx

@@ -1,4 +1,4 @@
-// §3 of NEXT_STEPS_UI_PLAN.md — a small "?" trigger next to any label a
+// A small "?" trigger next to any label a
 // first-time visitor wouldn't already understand. Hover opens it on
 // desktop; a tap toggles it open on touch, since CSS-only `:hover` doesn't
 // exist there. No tooltip library — a plain `position: absolute` popover

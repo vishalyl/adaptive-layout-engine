@@ -22,7 +22,7 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
 
-    /* Strictness required by BUILD_SPEC.md §3.4 */
+    /* Maximum strictness: the engine is meant to be provably typed */
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,

@@ -1,14 +1,13 @@
-// §16.1-equivalent coverage for the two new shipped ads (§2 of
-// NEXT_STEPS_UI_PLAN.md). `defineAd` itself already enforces "exactly one
+// Coverage for every shipped ad, not just KEEL. `defineAd` itself already enforces "exactly one
 // primary, exactly one action, unique ids" at construction time, so the
 // main thing worth asserting per-ad here is that resolve() doesn't throw
 // and produces zero validator violations across every shipped surface —
 // mirrors the existing keelAd coverage in resolver.spec.ts.
 
 import { describe, expect, it } from 'vitest';
-import { resolve } from '../src/engine/resolver';
+import { resolve } from '../src/resolver';
 import { ads } from '../src/demo/creatives';
-import { surfaces } from '../src/demo/surfaces';
+import { surfaces } from '../src/surfaces';
 
 describe('resolve — every shipped ad × every shipped surface', () => {
   for (const { key: adKey, spec } of ads) {

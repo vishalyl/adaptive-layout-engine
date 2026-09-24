@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:render": "node scripts/check-render.mjs",
     "typecheck": "tsc -b --noEmit",
     "verify": "npm run typecheck && npm run test && npm run build"
   },
@@ -25,6 +26,7 @@
     "@vitest/ui": "^5.0.0",
     "jsdom": "^30.0.1",
     "oxlint": "^1.81.0",
+    "playwright-core": "^1.63.0",
     "typescript": "~6.0.2",
     "vite": "^8.3.0",
     "vitest": "^5.0.0"

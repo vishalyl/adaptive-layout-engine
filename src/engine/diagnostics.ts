@@ -1,4 +1,4 @@
-// A structured trace of every decision the resolver makes (§12). This is
+// A structured trace of every decision the resolver makes. This is
 // what turns "walk through why a specific element ended up at a specific
 // position and size" from a memory test into a pointing exercise — the
 // demo's diagnostics panel (Gate 6) just renders this data.
@@ -6,8 +6,9 @@
 // Quietly, it is also evidence the resolver is real: a hardcoded per-surface
 // lookup table cannot narrate its own reasoning the way this can.
 
-import type { AspectClass, ScaleClass } from './classify';
+import type { AspectClass } from './classify';
 import type { DropReason, Rung } from './degradation';
+import type { Priority } from '../spec';
 import type { TemplateId } from './templates';
 
 export interface Decision {
@@ -21,10 +22,38 @@ export interface DropRecord {
   readonly atIteration: number;
 }
 
+// One step of the degradation loop, with everything needed to check it was
+// the right one: which axis was being resolved, the overflow before and
+// after (the step must reduce it), the other candidates in the victim's
+// priority band, and the worse-priority elements that were examined first
+// and had no step that would have helped (`blocked`).
 export interface RungRecord {
   readonly id: string;
+  readonly priority: Priority;
   readonly rung: Rung;
+  // Cuts carried into this step because it only works with them (e.g. a
+  // price may end in "…" AND move beside the CTA). Usually empty.
+  readonly bundled: readonly Rung[];
+  // Slot-mates of equal or worse priority that took the same step jointly,
+  // because in a shared row neither step helps alone. Usually empty.
+  readonly partners: readonly string[];
   readonly atIteration: number;
+  readonly axis: 'x' | 'y';
+  readonly overflowBefore: number;
+  readonly overflowAfter: number;
+  readonly candidates: readonly { readonly id: string; readonly priority: Priority; readonly rung: Rung }[];
+  readonly blocked: readonly string[];
+  // True when no step fit without creating horizontal overflow, so the loop
+  // accepted one that reduced the total instead (resolver.ts `helps`).
+  readonly relaxed: boolean;
+  readonly note: string;
+}
+
+// A step undone after the loop converged, because the layout still fits
+// without it (the "reclaim" pass in resolver.ts).
+export interface RestoreRecord {
+  readonly id: string;
+  readonly rung: Rung;
   readonly note: string;
 }
 
@@ -38,11 +67,12 @@ export type ViolationKind =
   | 'safe-area'
   | 'tap-target'
   | 'text-floor'
-  | 'scan-integrity';
+  | 'scan-integrity'
+  | 'contrast';
 
 // 'error' means a hard invariant actually broke (overlap, clipping, a
-// floor violated) — these are what §11 throws on in dev. 'warning' is
-// reserved for the one explicitly softer check (§11.3): an element resting
+// floor violated) — these are what the validator throws on in dev. 'warning' is
+// reserved for the one explicitly softer check: an element resting
 // in the safe-area margin is worth flagging, not failing.
 export type ViolationSeverity = 'error' | 'warning';
 
@@ -57,12 +87,12 @@ export interface Diagnostics {
   readonly surfaceSummary: {
     readonly aspect: number;
     readonly aspectClass: AspectClass;
-    readonly scaleClass: ScaleClass;
     readonly templateId: TemplateId;
   };
   readonly decisions: readonly Decision[];
   readonly drops: readonly DropRecord[];
   readonly rungsApplied: readonly RungRecord[];
+  readonly restored: readonly RestoreRecord[];
   readonly violations: readonly Violation[];
   readonly iterations: number;
   readonly resolveMs: number;
@@ -81,6 +111,7 @@ export class DiagnosticsBuilder {
   private readonly decisions: Decision[] = [];
   private readonly drops: DropRecord[] = [];
   private readonly rungsApplied: RungRecord[] = [];
+  private readonly restored: RestoreRecord[] = [];
   private truncated = false;
 
   note(phase: string, note: string): void {
@@ -95,8 +126,18 @@ export class DiagnosticsBuilder {
     this.drops.push({ id, reason, atIteration });
   }
 
-  recordRung(id: string, rung: Rung, atIteration: number, note: string): void {
-    this.rungsApplied.push({ id, rung, atIteration, note });
+  recordRung(record: RungRecord): void {
+    this.rungsApplied.push(record);
+  }
+
+  recordRestore(record: RestoreRecord): void {
+    this.restored.push(record);
+  }
+
+  // A reverted drop is no longer a drop.
+  undoDrop(id: string): void {
+    const i = this.drops.findIndex((d) => d.id === id);
+    if (i >= 0) this.drops.splice(i, 1);
   }
 
   build(
@@ -113,6 +154,7 @@ export class DiagnosticsBuilder {
       decisions: this.decisions,
       drops: this.drops,
       rungsApplied: this.rungsApplied,
+      restored: this.restored,
       violations,
       iterations,
       resolveMs,

@@ -2,11 +2,11 @@
 // differently than KEEL: a hero that's slightly *wide* (intrinsicAspect
 // 1.2, the opposite of KEEL's tall 0.38 flask) and a leaner element list
 // (no badge, no legal line) — proving the engine handles a sparse spec as
-// gracefully as a rich one. See NEXT_STEPS_UI_PLAN.md §2.
+// gracefully as a rich one.
 
-import { defineAd } from '../../engine/spec';
-import { svgDataUri } from './svg';
-import type { AdPalette } from '../../render/render-dom';
+import { defineAd } from '../../spec';
+import { brandLockup, svgDataUri } from './svg';
+import type { AdPalette } from '../../render-dom';
 
 const ORBIT_CHARCOAL = '#2B2724';
 const ORBIT_CORAL = '#FF6B4A';
@@ -36,53 +36,99 @@ const heroSvg = `
         <stop offset="0%" stop-color="#F5EDE4"/>
         <stop offset="100%" stop-color="#E8D8C8"/>
       </linearGradient>
+      <linearGradient id="orbitBudHighlight" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.3"/>
+        <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+      </linearGradient>
       <filter id="orbitShadow" x="-15%" y="-15%" width="130%" height="130%">
         <feDropShadow dx="0" dy="4" stdDeviation="8" flood-opacity="0.30"/>
       </filter>
+      <filter id="orbitShadowSoft" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="8" stdDeviation="14" flood-opacity="0.15"/>
+      </filter>
       <radialGradient id="orbitBg" cx="50%" cy="50%" r="50%">
-        <stop offset="0%" stop-color="${ORBIT_CREAM}" stop-opacity="0.08"/>
+        <stop offset="0%" stop-color="${ORBIT_CREAM}" stop-opacity="0.10"/>
         <stop offset="100%" stop-color="${ORBIT_CREAM}" stop-opacity="0"/>
       </radialGradient>
+      <radialGradient id="orbitSpeaker" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#5C5C5C"/>
+        <stop offset="60%" stop-color="#4A4A4A"/>
+        <stop offset="100%" stop-color="#3E3E3E"/>
+      </radialGradient>
     </defs>
-    <!-- Background glow circle -->
-    <circle cx="120" cy="100" r="100" fill="url(#orbitBg)"/>
-    <g filter="url(#orbitShadow)">
+    <!-- Background glow circle (slightly larger, more diffuse) -->
+    <circle cx="120" cy="100" r="110" fill="url(#orbitBg)" opacity="0.8"/>
+    <g filter="url(#orbitShadowSoft)">
       <!-- Case body -->
       <rect x="10" y="10" width="220" height="180" rx="42" fill="url(#orbitCase)"/>
+      <!-- Top highlight (specular reflection) -->
+      <rect x="10" y="10" width="220" height="6" rx="3" fill="white" opacity="0.07"/>
+      <!-- Left edge highlight -->
+      <rect x="10" y="16" width="3" height="168" rx="1.5" fill="white" opacity="0.04"/>
       <!-- Case lid line -->
       <line x1="10" y1="100" x2="230" y2="100" stroke="#2B2724" stroke-width="2.5" opacity="0.5"/>
       <!-- Left earbud (visible in left half) -->
       <circle cx="82" cy="82" r="32" fill="url(#orbitBud)"/>
-      <circle cx="82" cy="82" r="12" fill="#3E3833"/>
+      <!-- Earbud specular highlight -->
+      <circle cx="78" cy="76" r="14" fill="white" opacity="0.12"/>
+      <!-- Inner grille -->
+      <circle cx="82" cy="82" r="14" fill="url(#orbitSpeaker)"/>
+      <!-- Speaker mesh dots -->
+      <circle cx="82" cy="82" r="5" fill="#3E3833" opacity="0.6"/>
+      <circle cx="79" cy="80" r="1.5" fill="#3E3833" opacity="0.4"/>
+      <circle cx="85" cy="80" r="1.5" fill="#3E3833" opacity="0.4"/>
+      <circle cx="79" cy="84" r="1.5" fill="#3E3833" opacity="0.4"/>
+      <circle cx="85" cy="84" r="1.5" fill="#3E3833" opacity="0.4"/>
+      <!-- Center dot -->
       <circle cx="82" cy="82" r="4" fill="#5C5C5C"/>
       <!-- Earbud stem -->
-      <rect x="77" y="110" width="10" height="28" rx="5" fill="url(#orbitBud)"/>
+      <rect x="77" y="110" width="10" height="30" rx="5" fill="url(#orbitBud)"/>
+      <!-- Stem specular -->
+      <rect x="78" y="112" width="2" height="26" rx="1" fill="white" opacity="0.08"/>
+      <!-- Stem tip (smaller oval) -->
+      <ellipse cx="82" cy="142" rx="4" ry="2" fill="url(#orbitBud)"/>
       <!-- Right earbud (visible in right half) -->
       <circle cx="158" cy="82" r="32" fill="url(#orbitBud)"/>
-      <circle cx="158" cy="82" r="12" fill="#3E3833"/>
+      <!-- Earbud specular highlight -->
+      <circle cx="154" cy="76" r="14" fill="white" opacity="0.12"/>
+      <!-- Inner grille -->
+      <circle cx="158" cy="82" r="14" fill="url(#orbitSpeaker)"/>
+      <circle cx="158" cy="82" r="5" fill="#3E3833" opacity="0.6"/>
+      <circle cx="155" cy="80" r="1.5" fill="#3E3833" opacity="0.4"/>
+      <circle cx="161" cy="80" r="1.5" fill="#3E3833" opacity="0.4"/>
+      <circle cx="155" cy="84" r="1.5" fill="#3E3833" opacity="0.4"/>
+      <circle cx="161" cy="84" r="1.5" fill="#3E3833" opacity="0.4"/>
       <circle cx="158" cy="82" r="4" fill="#5C5C5C"/>
       <!-- Earbud stem -->
-      <rect x="153" y="110" width="10" height="28" rx="5" fill="url(#orbitBud)"/>
+      <rect x="153" y="110" width="10" height="30" rx="5" fill="url(#orbitBud)"/>
+      <rect x="154" y="112" width="2" height="26" rx="1" fill="white" opacity="0.08"/>
+      <ellipse cx="158" cy="142" rx="4" ry="2" fill="url(#orbitBud)"/>
       <!-- Hinge detail -->
       <rect x="112" y="14" width="16" height="8" rx="4" fill="${ORBIT_CORAL}"/>
-      <!-- Subtle highlight -->
-      <rect x="10" y="10" width="220" height="4" rx="2" fill="white" opacity="0.08"/>
+      <!-- Hinge reflection -->
+      <rect x="113" y="15" width="14" height="2" rx="1" fill="white" opacity="0.25"/>
     </g>
   </svg>
 `;
 
 // A ring monogram "O", square (intrinsicAspect 1). Filled with cream rather
 // than charcoal: the ad background is charcoal, so a charcoal-on-charcoal
-// mark would vanish (the same reasoning KEEL's logo follows, §6.3).
-const logoSvg = `
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+// mark would vanish (the same reasoning KEEL's logo follows).
+// Brand lockup: the monogram tile plus the brand name, so the brand is
+// legible wherever the logo survives (see brandLockup in svg.ts).
+const logo = brandLockup({
+  tile: `
     <rect width="64" height="64" rx="14" fill="${ORBIT_CREAM}" />
     <circle cx="32" cy="32" r="19" fill="none" stroke="${ORBIT_CHARCOAL}" stroke-width="8" />
-  </svg>
-`;
+  `,
+  name: 'ORBIT',
+  nameColor: ORBIT_CREAM,
+  charWidth: 29,
+});
 
 export const orbitAd = defineAd({
   name: 'ORBIT earbuds — Launch',
+  background: ORBIT_CHARCOAL,
   elements: [
     {
       id: 'headline',
@@ -135,12 +181,13 @@ export const orbitAd = defineAd({
       id: 'logo',
       type: 'image',
       role: 'branding',
-      priority: 3,
+      priority: 2,
       degradability: 'droppable',
-      src: svgDataUri(logoSvg),
-      intrinsicAspect: 1,
+      src: svgDataUri(logo.svg),
+      markColor: ORBIT_CREAM,
+      intrinsicAspect: logo.aspect,
       fit: 'contain',
-      minShortSidePx: 24,
+      minShortSidePx: 22,
     },
     {
       id: 'qr',

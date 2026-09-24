@@ -1,9 +1,9 @@
 // Surface profiles: the physical/display constraints of wherever an ad is
 // about to be shown. Nothing in this file knows the *name* or category of a
-// surface — see §0.2 of BUILD_SPEC.md: no display-context identity may
+// surface: no display-context identity may
 // appear anywhere under src/engine/, including in comments, since that is
 // exactly what tests/purity.spec.ts greps for. Named profiles live in
-// src/demo/surfaces.ts, which is the only place allowed to attach an
+// src/surfaces.ts, which is the only place allowed to attach an
 // identity to a `SurfaceProfile` value.
 //
 // The interesting design move here is encoding *dependent* constraints as
@@ -17,6 +17,8 @@
 // the surface can even be touched. Same idea for `Viewing`: a surface
 // viewed up close has no `minTextPx`, because nothing needs a legibility
 // floor at close range — only the two more distant viewing bands do.
+
+import { isHexColor, type HexColor } from './contrast';
 
 export type Interaction =
   | { readonly mode: 'touch'; readonly minTapTargetPx: number }
@@ -35,6 +37,18 @@ export interface SafeArea {
   readonly left: number;
 }
 
+// A region of the surface whose background is NOT the ad's own — e.g. a lit
+// strip or a bright panel the ad is composited over. Pixel coordinates in
+// the surface's full (pre-safe-area) space. Later regions paint over
+// earlier ones.
+export interface BackdropRegion {
+  readonly x: number;
+  readonly y: number;
+  readonly w: number;
+  readonly h: number;
+  readonly color: HexColor;
+}
+
 export interface SurfaceProfile {
   readonly widthPx: number;
   readonly heightPx: number;
@@ -42,6 +56,10 @@ export interface SurfaceProfile {
   readonly interaction: Interaction;
   readonly viewing: Viewing;
   readonly densityScale?: number; // optional global type-scale nudge
+  readonly backdrop?: readonly BackdropRegion[];
+  // Minimum contrast a brand mark must have against whatever is behind it.
+  // Defaults to 3 (WCAG 1.4.11, non-text contrast).
+  readonly minContrastRatio?: number;
 }
 
 export class InvalidSurfaceError extends Error {
@@ -89,6 +107,28 @@ export function defineSurface(profile: SurfaceProfile): SurfaceProfile {
     throw new InvalidSurfaceError(
       `SurfaceProfile.safeArea top (${top}) + bottom (${bottom}) exceeds heightPx (${profile.heightPx}).`,
     );
+  }
+
+  (profile.backdrop ?? []).forEach((region, i) => {
+    const where = `SurfaceProfile.backdrop[${i}]`;
+    for (const [field, value] of Object.entries({ x: region.x, y: region.y, w: region.w, h: region.h })) {
+      if (!Number.isFinite(value) || value < 0) {
+        throw new InvalidSurfaceError(`${where}.${field} must be a non-negative finite number, got ${value}.`);
+      }
+    }
+    if (region.x + region.w > profile.widthPx || region.y + region.h > profile.heightPx) {
+      throw new InvalidSurfaceError(`${where} extends outside the ${profile.widthPx}×${profile.heightPx} surface.`);
+    }
+    if (!isHexColor(region.color)) {
+      throw new InvalidSurfaceError(`${where}.color must be a #rgb or #rrggbb hex colour, got ${JSON.stringify(region.color)}.`);
+    }
+  });
+
+  if (profile.minContrastRatio !== undefined) {
+    const r = profile.minContrastRatio;
+    if (!Number.isFinite(r) || r < 1 || r > 21) {
+      throw new InvalidSurfaceError(`SurfaceProfile.minContrastRatio must be between 1 and 21, got ${r}.`);
+    }
   }
 
   return profile;

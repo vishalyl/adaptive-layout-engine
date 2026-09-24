@@ -1,23 +1,29 @@
-// ResolvedLayout -> React/DOM. This is the ONLY renderer allowed to make
-// layout decisions of its own — and it doesn't: every `left/top/width/height`
-// below is copied verbatim, in px, from `entry.rect`. Zero `@media` queries,
-// zero flexbox/grid deciding size or position. Flexbox appears exactly once,
-// to centre a button label *inside* its own already-sized box — that is
-// trivial self-centring, not a layout decision, and is called out below.
+// ResolvedLayout -> React/DOM. The renderer makes no layout decisions of
+// its own: every `left/top/width/height` below is copied verbatim, in true
+// surface pixels, from `entry.rect`, and every font size from
+// `entry.typography`. Zero `@media` queries, zero flexbox/grid deciding size
+// or position (flexbox only centres content inside an already-sized box).
+//
+// It renders at the surface's REAL size. Fitting a 1920px surface into a
+// preview is the host's job (StageFrame applies a CSS transform to this
+// whole tree), so text is laid out by the browser at exactly the pixel size
+// the resolver measured — which is what makes "no clipping" hold on screen,
+// not just in the engine's arithmetic.
 //
 // The renderer needs two inputs: `layout` for geometry (from resolve()) and
 // `spec` for content (text/image src/label/payload never change with the
 // surface, so resolve() doesn't carry them — only where things go).
 
 import type { CSSProperties } from 'react';
-import type { AdElement, AdSpec, Role } from '../engine/spec';
-import type { LayoutEntry, ResolvedLayout } from '../engine/resolver';
-import type { Rect } from '../engine/types';
+import type { AdElement, AdSpec, Role } from './spec';
+import type { LayoutEntry, ResolvedLayout } from './resolver';
+import type { Rect } from './engine/types';
+import { textPaddingFor } from './engine/textChrome';
 
-// The KEEL brand tokens from BUILD_SPEC.md §6.3, now also the default
+// The KEEL brand tokens, now also the default
 // `AdPalette` below. Duplicated here rather than imported from
-// src/demo/creative.ts — this renderer must import nothing from demo/
-// (§13.1), the same independence render-canvas.ts is held to, so each
+// src/demo/creative.ts — this renderer must import nothing from demo/,
+// the same independence render-canvas.ts is held to, so each
 // backend carries its own tiny copy of the palette rather than sharing one
 // through a path this component isn't allowed to take.
 const KEEL_MARINE = '#0E2A38';
@@ -40,7 +46,7 @@ const KEEL_SIGNAL = '#F2B705';
 // Must match FONT_FAMILY in resolver.ts and render-canvas.ts. The measurer
 // is told to measure in Archivo, so a DOM backend that draws in anything
 // else is drawing text the resolver never sized. Duplicated here rather
-// than imported because this renderer must import nothing from demo/ (§13.1)
+// than imported because this renderer must import nothing from demo/
 // and nothing from the other backend.
 const FONT_FAMILY = 'Archivo, sans-serif';
 
@@ -79,7 +85,7 @@ export interface RenderDomProps<Ids extends string> {
   // Draws zone boundaries and per-element id/priority labels — cheap to
   // build, and it makes the algorithm visible to anyone skimming the demo.
   readonly showDebugOverlay?: boolean;
-  // Powers the element inspector (§14.6) — a click reports the id upward,
+  // Powers the element inspector — a click reports the id upward,
   // the currently-selected id gets a visible highlight. Both optional: a
   // renderer consumer that doesn't want interactivity just omits them.
   readonly selectedElementId?: string | null;
@@ -87,11 +93,6 @@ export interface RenderDomProps<Ids extends string> {
   // Defaults to the original KEEL tokens so any existing caller that omits
   // this keeps looking exactly as it did before.
   readonly palette?: AdPalette;
-  // Optional scale factor for the on-screen surface relative to layout space.
-  // When the preview container is smaller than the layout (e.g. 420 px
-  // preview for a 1080 px layout), fonts must shrink proportionally so
-  // text remains readable.  1 = 1:1, 0.5 = halved.
-  readonly surfaceScale?: number;
 }
 
 interface NodeProps {
@@ -100,21 +101,18 @@ interface NodeProps {
   readonly selected?: boolean | undefined;
   readonly onSelect?: ((id: string) => void) | undefined;
   readonly palette: AdPalette;
-  readonly layoutW: number;
-  readonly layoutH: number;
-  readonly surfaceScale: number;
 }
 
-interface RectStyleDeps { layoutW: number; layoutH: number; }
-
-const rectStyle = (rect: Rect, deps: RectStyleDeps): CSSProperties => ({
+const rectStyle = (rect: Rect): CSSProperties => ({
   position: 'absolute',
-  left: `${(rect.x / deps.layoutW) * 100}%`,
-  top: `${(rect.y / deps.layoutH) * 100}%`,
-  width: `${(rect.w / deps.layoutW) * 100}%`,
-  height: `${(rect.h / deps.layoutH) * 100}%`,
+  left: rect.x,
+  top: rect.y,
+  width: rect.w,
+  height: rect.h,
   boxSizing: 'border-box',
 });
+
+const TEXT_ALIGN = { start: 'left', center: 'center', end: 'right' } as const;
 
 // Shared by every node: the click handler and the selection highlight.
 // Kept as a small object spread rather than its own component, since each
@@ -130,60 +128,38 @@ function interactionProps(element: AdElement, selected: boolean | undefined, onS
   };
 }
 
-function TextNode({ element, entry, selected, onSelect, palette, layoutW, layoutH, surfaceScale }: NodeProps) {
+function TextNode({ element, entry, selected, onSelect, palette }: NodeProps) {
   if (!entry.placed || element.type !== 'text') return null;
   const typography = entry.typography;
   const interaction = interactionProps(element, selected, onSelect);
-  // The badge (role 'incentive') is the one text element styled as a
-  // filled chip rather than bare type — background-color and radius never
-  // change the box's outer size, so this stays purely decorative: the
-  // resolver's rect, and therefore the measurer's width assumption, is
-  // untouched.
+  // The badge (role 'incentive') is the one text element styled as a filled
+  // chip. Background and radius never change the box's outer size.
   const isBadge = element.role === 'incentive';
-  // Legal text gets minimal padding (it's small fine print); everything else
-  // gets 6 px vertical + 10 px horizontal — enough breathing room that the
-  // layout reads as designed rather than wireframe.  Padding is applied via
-  // box-sizing: border-box, so the rect from the resolver remains the outer
-  // boundary — padding lives inside it.  This is purely cosmetic; the engine
-  // never needs to know about it.
-  const padY = element.role === 'legal' ? 2 : 6;
-  const padX = element.role === 'legal' ? 4 : 10;
-  const deps = { layoutW, layoutH };
-  // Scale font sizes so text fits inside resizer-allocated rects at
-  // any preview size.  surfaceScale=1 → original size (1:1 rendering).
-  // Apply a minimum floor (10px) so tall-surface layouts don't shrink
-  // text below readability (e.g. 600×1600 panel scaled to a 420px-tall
-  // viewport would give 0.26×scale → 10px headline floor).
-  const fontPx = Math.max((typography?.fontPx ?? element.idealFontPx) * surfaceScale, 10);
-  const clampLines = typography?.lines ?? element.maxLines;
-  // `-webkit-line-clamp` (below) is the standard technique for a genuine
-  // *multi*-line clamp, but for a single line it's the wrong tool: browsers'
-  // `-webkit-box` flex-model sizing for it doesn't always agree with a plain
-  // border-box width the way normal block text does, and at a box sized with
-  // near-zero slack (exactly the case here — the engine sizes every text box
-  // to just fit its content, see textChrome.ts) that mismatch is enough to
-  // wrap and clip text that fits by every other measurement. A single line
-  // has a standard, well-defined truncation technique that doesn't share
-  // that quirk — `nowrap` + `text-overflow` — so use that instead whenever
-  // there's only one line to show.
-  const overflowStyle: CSSProperties = clampLines <= 1
-    ? {
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: typography?.truncated ? 'ellipsis' : 'clip',
-      }
-    : {
-        overflow: 'hidden',
-        display: '-webkit-box',
-        WebkitBoxOrient: 'vertical',
-        WebkitLineClamp: clampLines,
-        textOverflow: typography?.truncated ? 'ellipsis' : 'clip',
-      };
+  // The same padding the resolver budgeted into this rect (textChrome.ts),
+  // applied inside it via border-box — so the content area is exactly what
+  // the text was measured against.
+  const pad = textPaddingFor(element.role);
+  const fontPx = typography?.fontPx ?? element.idealFontPx;
+  const lines = typography?.lines ?? element.maxLines;
+  const truncated = typography?.truncated ?? false;
+  // A single line uses nowrap + text-overflow; several lines use line-clamp.
+  // Either way an ellipsis appears only where the resolver says content was
+  // actually cut (`truncated`).
+  const overflowStyle: CSSProperties =
+    lines <= 1
+      ? { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: truncated ? 'ellipsis' : 'clip' }
+      : {
+          overflow: 'hidden',
+          display: '-webkit-box',
+          WebkitBoxOrient: 'vertical',
+          WebkitLineClamp: lines,
+          textOverflow: truncated ? 'ellipsis' : 'clip',
+        };
   return (
     <div
       onClick={interaction.onClick}
       style={{
-        ...rectStyle(entry.rect, deps),
+        ...rectStyle(entry.rect),
         ...interaction.style,
         fontSize: `${fontPx}px`,
         fontFamily: FONT_FAMILY,
@@ -191,34 +167,42 @@ function TextNode({ element, entry, selected, onSelect, palette, layoutW, layout
         fontWeight: element.weight,
         letterSpacing: element.tracking !== undefined ? `${element.tracking}px` : undefined,
         color: isBadge ? palette.badgeText : textColorForRole(element.role, palette),
-        padding: `${padY}px ${padX}px`,
+        padding: `${pad.y}px ${pad.x}px`,
         boxSizing: 'border-box',
         background: isBadge ? palette.badgeBg : undefined,
         borderRadius: isBadge ? 999 : 0,
-        textAlign: isBadge ? 'center' : undefined,
+        textAlign: isBadge ? 'center' : TEXT_ALIGN[typography?.align ?? 'start'],
         ...overflowStyle,
       }}
       data-element-id={element.id}
       data-role={element.role}
+      data-kind="text"
+      data-truncated={truncated ? 'true' : 'false'}
     >
       {element.content}
     </div>
   );
 }
 
-function ImageNode({ element, entry, selected, onSelect, palette, layoutW, layoutH }: NodeProps) {
+function ImageNode({ element, entry, selected, onSelect, palette }: NodeProps) {
   if (!entry.placed || element.type !== 'image') return null;
   const interaction = interactionProps(element, selected, onSelect);
-  const deps = { layoutW, layoutH };
   const minDim = Math.min(entry.rect.w, entry.rect.h);
   // A soft lightening backdrop behind hero/logo art — mostly invisible at
   // large sizes, but at small render sizes it's what keeps a dark-toned
   // asset (e.g. a near-black product photo) from disappearing into an
   // equally-dark ad background. `22` hex (~13% alpha) was `08` (~3%) —
   // too faint to register at the sizes small surfaces actually use.
-  const bgCircle = minDim > 40
-    ? `radial-gradient(circle at 50% 50%, ${palette.text}22 0%, transparent 70%)`
-    : undefined;
+  // A contrast plate (resolver.ts `attachContrast`) replaces the soft glow:
+  // the resolver found this mark below the surface's contrast floor against
+  // what is behind it, so it gets a solid fill inside its own rect, with
+  // the mark inset so the plate reads as a deliberate frame.
+  const plate = entry.contrast?.plate ?? null;
+  const bgCircle = plate
+    ? plate
+    : minDim > 40
+      ? `radial-gradient(circle at 50% 50%, ${palette.text}22 0%, transparent 70%)`
+      : undefined;
   // NOTE: no overflow:hidden — hero images must render at their full
   // computed rect.  The resolver's cross-axis clamp already keeps the
   // image within the zone's bounds, so clipping the image on overflow
@@ -228,16 +212,21 @@ function ImageNode({ element, entry, selected, onSelect, palette, layoutW, layou
     <div
       onClick={interaction.onClick}
       style={{
-        ...rectStyle(entry.rect, deps),
+        ...rectStyle(entry.rect),
         ...interaction.style,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         background: bgCircle,
         borderRadius: 8,
+        // Pixels, not '12%': percentage padding resolves against the
+        // containing block (the whole surface), not this element.
+        padding: plate ? Math.round(minDim * 0.12) : undefined,
+        boxSizing: 'border-box',
       }}
       data-element-id={element.id}
       data-role={element.role}
+      data-contrast-plate={plate ?? undefined}
     >
       <img
         src={element.src}
@@ -248,17 +237,16 @@ function ImageNode({ element, entry, selected, onSelect, palette, layoutW, layou
   );
 }
 
-function ButtonNode({ element, entry, selected, onSelect, palette, layoutW, layoutH, surfaceScale }: NodeProps) {
+function ButtonNode({ element, entry, selected, onSelect, palette }: NodeProps) {
   if (!entry.placed || element.type !== 'button') return null;
-  const typography = entry.typography;
+  // The label size the resolver actually chose (it shrinks and grows too).
+  const fontPx = entry.typography?.fontPx ?? element.idealFontPx;
   const interaction = interactionProps(element, selected, onSelect);
-  const deps = { layoutW, layoutH };
-  const fontPx = Math.max((typography?.fontPx ?? element.idealFontPx) * surfaceScale, 10);
   return (
     <div
       onClick={interaction.onClick}
       style={{
-        ...rectStyle(entry.rect, deps),
+        ...rectStyle(entry.rect),
         ...interaction.style,
         // The one legitimate use of flexbox in the ad render path: centring
         // a label inside a box whose size was already fully decided by the
@@ -270,7 +258,7 @@ function ButtonNode({ element, entry, selected, onSelect, palette, layoutW, layo
         fontFamily: FONT_FAMILY,
         fontWeight: 700,
         whiteSpace: 'nowrap',
-        // The ad's one accent color, spent exactly once (§6.3) — this is
+        // The ad's one accent color, spent exactly once — this is
         // that one place.  A subtle gradient and shadow give the button a
         // tactile, pressable feel that flat solid colour lacks.
         background: `linear-gradient(180deg, ${palette.ctaBg}, ${darken(palette.ctaBg, 15)} )`,
@@ -282,8 +270,9 @@ function ButtonNode({ element, entry, selected, onSelect, palette, layoutW, layo
       }}
       data-element-id={element.id}
       data-role={element.role}
+      data-kind="button"
     >
-      {element.label}
+      <span data-label="true" style={{ whiteSpace: 'nowrap' }}>{element.label}</span>
     </div>
   );
 }
@@ -291,10 +280,11 @@ function ButtonNode({ element, entry, selected, onSelect, palette, layoutW, layo
 // QR code placeholder: a proper QR-like pattern with finder patterns
 // (the three square corners) and a randomized data area, framed as a card
 // so it reads as a deliberate "scan me" target rather than a stray white
-// square. `entry.rect` is the resolver's fixed `modules × minModulePx`
-// floor (§8.4) — it never grows just because its zone has room to spare, so
-// every bit of this card's chrome (outer padding, caption row, gap) has to
-// be budgeted OUT of that same fixed box, the same lesson as the text
+// square. `entry.rect` is exactly the side the resolver chose (its module
+// floor, or bigger when viewed from a distance) — it never grows just
+// because its zone has room to spare, so every bit of this card's chrome
+// (outer padding, caption row, gap) has to be budgeted OUT of that same
+// box, the same lesson as the text
 // padding fix above: adding chrome on top of an already-exact box, rather
 // than carving it out of that box's own budget, silently overflows. The
 // caption is dropped below a size threshold rather than let it overflow a
@@ -304,32 +294,26 @@ const SCAN_CAPTION_H = 11;
 const SCAN_CAPTION_GAP = 3;
 const SCAN_MIN_PATTERN_PX = 24; // below this a caption would crowd out legibility — skip it
 
-function ScanNode({ element, entry, selected, onSelect, layoutW, layoutH, surfaceScale }: NodeProps) {
+function ScanNode({ element, entry, selected, onSelect }: NodeProps) {
   if (!entry.placed || element.type !== 'scan') return null;
   const captionReserve = SCAN_CAPTION_H + SCAN_CAPTION_GAP;
   const rawBudget = Math.min(entry.rect.w, entry.rect.h) - 2 * SCAN_OUTER_PAD;
   const showCaption = rawBudget - captionReserve >= SCAN_MIN_PATTERN_PX;
   const patternBudget = Math.max(SCAN_MIN_PATTERN_PX, rawBudget - (showCaption ? captionReserve : 0));
-  // Grid geometry (module count, finder pattern layout) is computed in the
-  // resolver's true pixel space above — that's what decides how many
-  // modules fit. Everything actually drawn to CSS below is that geometry
-  // times `surfaceScale`: `entry.rect` itself becomes a smaller on-screen
-  // footprint via `rectStyle`'s percentage sizing (which auto-follows a
-  // physically-shrunken preview container), but these inner cells are sized
-  // in literal px, which does NOT auto-shrink with the container — without
-  // this multiplication the pattern renders at full true-pixel size inside
-  // a much smaller box on any preview that isn't shown 1:1 (e.g. a tall
-  // panel scaled to a fraction of its real size), the same class of bug
-  // TextNode's `fontPx * surfaceScale` already guards against.
   const cellSize = Math.max(2, Math.floor(patternBudget / 25));
   const gridSize = Math.floor(patternBudget / cellSize);
-  const cellPx = Math.max(1, cellSize * surfaceScale);
+  const cellPx = cellSize;
   const interaction = interactionProps(element, selected, onSelect);
-  const deps = { layoutW, layoutH };
   // Deterministic pseudo-random pattern seeded by payload length so it's
   // the same for a given QR but looks different across different ads.
   const seed = element.payload.length * 7 + element.id.length;
-  const seededRandom = (i: number) => ((seed * 9301 + 49297 + i * 233) % 233280) / 233280;
+  // An integer hash per cell (not a linear formula, which produces long runs
+  // of identical cells and reads as a blank white box).
+  const seededRandom = (i: number) => {
+    let h = Math.imul(i + 1, 2654435761) ^ Math.imul(seed + 7, 40503);
+    h = Math.imul(h ^ (h >>> 15), 2246822507);
+    return ((h ^ (h >>> 13)) >>> 0) / 4294967296;
+  };
   const finderSize = Math.min(7, Math.max(5, Math.floor(gridSize / 5)));
   const cells = Array.from({ length: gridSize * gridSize }, (_, i) => {
     const gx = i % gridSize;
@@ -352,18 +336,18 @@ function ScanNode({ element, entry, selected, onSelect, layoutW, layoutH, surfac
     <div
       onClick={interaction.onClick}
       style={{
-        ...rectStyle(entry.rect, deps),
+        ...rectStyle(entry.rect),
         ...interaction.style,
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: SCAN_CAPTION_GAP * surfaceScale,
-        padding: SCAN_OUTER_PAD * surfaceScale,
+        gap: SCAN_CAPTION_GAP,
+        padding: SCAN_OUTER_PAD,
         boxSizing: 'border-box',
         background: 'rgba(255,255,255,0.05)',
-        border: `${Math.max(1, surfaceScale)}px solid rgba(255,255,255,0.18)`,
-        borderRadius: 10 * surfaceScale,
+        border: '1px solid rgba(255,255,255,0.18)',
+        borderRadius: 10,
       }}
       data-element-id={element.id}
       data-role={element.role}
@@ -378,7 +362,7 @@ function ScanNode({ element, entry, selected, onSelect, layoutW, layoutH, surfac
           gridTemplateColumns: `repeat(${gridSize}, ${cellPx}px)`,
           gridTemplateRows: `repeat(${gridSize}, ${cellPx}px)`,
           background: '#FFFFFF',
-          borderRadius: 4 * surfaceScale,
+          borderRadius: 4,
         }}
       >
         {cells.map((v, i) => (
@@ -394,7 +378,7 @@ function ScanNode({ element, entry, selected, onSelect, layoutW, layoutH, surfac
       </div>
       {/* URL text below QR — only when the box has genuine room for it */}
       {showCaption && (
-        <div style={{ fontSize: Math.max(6, 8 * surfaceScale), color: 'rgba(255,255,255,0.55)', fontFamily: 'monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: gridSize * cellPx }}>
+        <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.55)', fontFamily: 'monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: gridSize * cellPx }}>
           {element.payload}
         </div>
       )}
@@ -403,18 +387,13 @@ function ScanNode({ element, entry, selected, onSelect, layoutW, layoutH, surfac
 }
 
 function ZoneOverlay({ layout }: { layout: ResolvedLayout }) {
-  const deps = { layoutW: layout.surface.full.w, layoutH: layout.surface.full.h };
   return (
     <>
       {layout.zones.map((zone) => (
         <div
           key={zone.id}
           style={{
-            position: 'absolute',
-            left: `${(zone.rect.x / deps.layoutW) * 100}%`,
-            top: `${(zone.rect.y / deps.layoutH) * 100}%`,
-            width: `${(zone.rect.w / deps.layoutW) * 100}%`,
-            height: `${(zone.rect.h / deps.layoutH) * 100}%`,
+            ...rectStyle(zone.rect),
             border: '1px dashed rgba(255,0,128,0.6)',
             pointerEvents: 'none',
           }}
@@ -428,15 +407,14 @@ function ZoneOverlay({ layout }: { layout: ResolvedLayout }) {
   );
 }
 
-function ElementOverlay({ elements, layout }: { elements: Readonly<Record<string, LayoutEntry>>, layout: ResolvedLayout }) {
-  const deps = { layoutW: layout.surface.full.w, layoutH: layout.surface.full.h };
+function ElementOverlay({ elements }: { elements: Readonly<Record<string, LayoutEntry>> }) {
   return (
     <>
       {Object.values(elements).map((entry) =>
         entry.placed ? (
           <div
             key={entry.id}
-            style={{ ...rectStyle(entry.rect, deps), border: '1px solid rgba(0,140,255,0.7)', pointerEvents: 'none' }}
+            style={{ ...rectStyle(entry.rect), border: '1px solid rgba(0,140,255,0.7)', pointerEvents: 'none' }}
           >
             <span
               style={{
@@ -466,27 +444,35 @@ export function RenderDom<Ids extends string>({
   selectedElementId,
   onSelectElement,
   palette = DEFAULT_PALETTE,
-  surfaceScale = 1,
 }: RenderDomProps<Ids>) {
-  const deps = { layoutW: layout.surface.full.w, layoutH: layout.surface.full.h };
   return (
     <div
+      data-surface-root="true"
       style={{
         position: 'relative',
-        width: '100%',
-        height: '100%',
+        width: layout.surface.full.w,
+        height: layout.surface.full.h,
         overflow: 'hidden',
         // Subtle radial gradient gives the ad a "lit from above" depth that
         // flat solid colour lacks — a small but noticeable quality bump.
         background: palette.background === '#ffffff'
           ? 'radial-gradient(ellipse at 50% 0%, #f8f6f3 0%, #ffffff 60%)'
-          : `linear-gradient(180deg, ${darken(palette.background, 3)} 0%, ${palette.background} 40%)`,
+          : `linear-gradient(180deg, ${darken(palette.background, 8)} 0%, ${palette.background} 40%)`,
       }}
     >
+      {/* Surface backdrop regions (e.g. a lit header strip) — painted so the
+          viewer can see what the contrast constraint reacted to. */}
+      {layout.surface.backdrops.map((b, i) => (
+        <div
+          key={`backdrop-${i}`}
+          aria-hidden="true"
+          style={{ ...rectStyle(b.rect), background: b.color, pointerEvents: 'none' }}
+        />
+      ))}
       {spec.elements.map((element) => {
         const entry = layout.elements[element.id as Ids];
         if (!entry) return null;
-        const nodeProps = { element, entry, selected: element.id === selectedElementId, onSelect: onSelectElement, palette, layoutW: deps.layoutW, layoutH: deps.layoutH, surfaceScale };
+        const nodeProps = { element, entry, selected: element.id === selectedElementId, onSelect: onSelectElement, palette };
         switch (element.type) {
           case 'text':
             return <TextNode key={element.id} {...nodeProps} />;
@@ -499,7 +485,7 @@ export function RenderDom<Ids extends string>({
         }
       })}
       {showDebugOverlay && <ZoneOverlay layout={layout} />}
-      {showDebugOverlay && <ElementOverlay elements={layout.elements} layout={layout} />}
+      {showDebugOverlay && <ElementOverlay elements={layout.elements} />}
     </div>
   );
 }

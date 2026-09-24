@@ -15,7 +15,7 @@
 // renderer applies it — rather than two independently-maintained copies of
 // the same numbers drifting apart.
 
-import type { Role } from './spec';
+import type { Role } from '../spec';
 
 export interface TextPadding {
   readonly x: number;

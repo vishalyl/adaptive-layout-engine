@@ -1,16 +1,16 @@
-// §16.1. Does the resolver actually run, on every shipped surface, without
+// Does the resolver actually run, on every shipped surface, without
 // throwing, place every 'fixed' element, produce zero validator violations,
 // select the expected template, and resolve deterministically?
 
 import { describe, expect, it } from 'vitest';
-import { resolve } from '../src/engine/resolver';
+import { resolve } from '../src/resolver';
 import { defineSurface } from '../src/engine/surface';
 import { estimateMeasurer } from '../src/engine/measure';
 import { textPaddingFor } from '../src/engine/textChrome';
 import { keelAd } from '../src/demo/creative';
-import { surfaces } from '../src/demo/surfaces';
+import { surfaces } from '../src/surfaces';
 import { fernAd } from '../src/demo/creatives/fern';
-import { fitPulseAd } from '../src/demo/creatives/fitpulse';
+import { provoxAd } from '../src/demo/creatives/provox';
 
 describe('resolve — every shipped surface', () => {
   for (const { key, profile } of surfaces) {
@@ -63,9 +63,8 @@ describe('resolve — template selection', () => {
       broadcastLowerThird: 'band-horizontal',
       retailKiosk: 'grid-square',
       printPanel: 'column-narrow',
-      // 300x100 has aspect 3.0 — inside [1.35, 3.5), so 'wide', not
-      // 'ultra-wide'; it's a stress case for *scale* (min side 100px is
-      // 'small'), not for aspect classification.
+      // 320x180 has aspect 1.78 — 'wide'. It's a stress case for space,
+      // not for aspect classification.
       cramped: 'split-horizontal',
     };
     for (const { key, profile } of surfaces) {
@@ -75,7 +74,7 @@ describe('resolve — template selection', () => {
   });
 });
 
-// §16.6 — the direct refutation of "uniform scaling passed off as
+// The direct refutation of "uniform scaling passed off as
 // adaptation." Two surfaces with the SAME area but very different aspect
 // must produce a genuinely different composition, not a scaled copy of the
 // same one — different template, and a different top-to-bottom order of
@@ -134,8 +133,8 @@ describe('resolve — recomposition, not scaling', () => {
 describe('resolve — text boxes budget room for the renderer\'s own padding', () => {
   const cases = [
     { adName: 'fern', ad: fernAd, surfaceKey: 'retailKiosk' },
-    { adName: 'fitpulse', ad: fitPulseAd, surfaceKey: 'printPanel' },
-    { adName: 'fitpulse', ad: fitPulseAd, surfaceKey: 'cramped' },
+    { adName: 'provox', ad: provoxAd, surfaceKey: 'printPanel' },
+    { adName: 'provox', ad: provoxAd, surfaceKey: 'cramped' },
   ] as const;
 
   for (const { adName, ad, surfaceKey } of cases) {
@@ -146,7 +145,9 @@ describe('resolve — text boxes budget room for the renderer\'s own padding', (
       for (const element of ad.elements) {
         if (element.type !== 'text') continue;
         const entry = layout.elements[element.id];
-        if (!entry?.placed || !entry.typography) continue;
+        // Text the resolver deliberately cut (a logged ELLIPSIS/TRUNCATE
+        // step) needs more lines than it shows — that's the point.
+        if (!entry?.placed || !entry.typography || entry.typography.truncated) continue;
 
         const pad = textPaddingFor(element.role);
         const contentWidth = Math.max(0, entry.rect.w - 2 * pad.x);
@@ -203,4 +204,46 @@ describe('resolve — text boxes budget room for the renderer\'s own padding', (
       }
     });
   }
+});
+
+// What the box model buys, checked on real ads.
+describe('resolve — composition from content, not fixed zones', () => {
+  const kiosk = surfaces.find((s) => s.key === 'retailKiosk')!.profile;
+
+  it('every element is attempted: on a roomy surface nothing is excluded', () => {
+    const layout = resolve(keelAd, kiosk);
+    for (const entry of Object.values(layout.elements)) expect(entry.placed, entry.id).toBe(true);
+  });
+
+  it('a slot with nothing in it takes no space (and is not reported)', () => {
+    const cramped = surfaces.find((s) => s.key === 'cramped')!.profile;
+    const layout = resolve(keelAd, cramped);
+    const occupied = new Set(Object.values(layout.elements).flatMap((e) => (e.placed ? [e.zone] : [])));
+    expect(layout.zones.map((z) => z.id).sort()).toEqual([...occupied].sort());
+  });
+
+  it('type grows uniformly on big surfaces only when nothing needed degrading — hierarchy intact', () => {
+    const layout = resolve(keelAd, kiosk);
+    expect(layout.typeScale).toBeGreaterThan(1);
+    const font = (id: 'headline' | 'price' | 'legal') => {
+      const e = layout.elements[id];
+      return e.placed ? e.typography!.fontPx : 0;
+    };
+    expect(font('headline')).toBeGreaterThan(font('price'));
+    expect(font('price')).toBeGreaterThan(font('legal'));
+  });
+
+  it('the hero absorbs leftover space instead of it sitting empty', () => {
+    const panel = surfaces.find((s) => s.key === 'printPanel')!.profile;
+    const layout = resolve(keelAd, panel);
+    const hero = layout.elements.hero;
+    expect(hero.placed && hero.rect.h).toBeGreaterThan(panel.heightPx * 0.4);
+  });
+
+  it('the CTA reports the label size the resolver chose, so no renderer guesses', () => {
+    for (const { profile } of surfaces) {
+      const cta = resolve(keelAd, profile).elements.cta;
+      expect(cta.placed && cta.typography?.fontPx).toBeGreaterThan(0);
+    }
+  });
 });

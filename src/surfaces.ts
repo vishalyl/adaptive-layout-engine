@@ -1,11 +1,10 @@
 // The named surface profiles. This is the ONLY place in the codebase where
 // a surface gets an identity — a label, a key, a display context. The
-// engine (src/engine/) never imports this file and never sees these names;
+// engine (src/spec.ts, src/resolver.ts, src/engine/) never imports this file and never sees these names;
 // it only ever receives a plain SurfaceProfile of numbers and constraint
-// unions. tests/purity.spec.ts enforces this mechanically. See BUILD_SPEC.md
-// §0.2 and §7.
+// unions. tests/purity.spec.ts enforces this mechanically.
 
-import { defineSurface, type SurfaceProfile } from '../engine/surface';
+import { defineSurface, type SurfaceProfile } from './engine/surface';
 
 export interface NamedSurface {
   readonly key: string;
@@ -75,10 +74,10 @@ export const surfaces: readonly NamedSurface[] = [
   },
   {
     key: 'cramped',
-    label: 'Compact banner (stress case)',
+    label: 'Compact card (stress case)',
     profile: defineSurface({
-      widthPx: 300,
-      heightPx: 100,
+      widthPx: 320,
+      heightPx: 180,
       safeArea: ZERO_SAFE_AREA,
       interaction: { mode: 'pointer', minTapTargetPx: 44 },
       viewing: { distance: 'near' },

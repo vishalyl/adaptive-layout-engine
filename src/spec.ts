@@ -3,9 +3,10 @@
 // actually use (a button has no `maxLines`, a text element has no `fit`).
 //
 // This file is deliberately framework-free and surface-free: nothing here
-// knows what device the ad will eventually render on. See §0.2 of
-// BUILD_SPEC.md — that boundary is enforced for surface.ts too, and checked
-// mechanically by tests/purity.spec.ts once it exists.
+// knows what device the ad will eventually render on — that boundary holds
+// for surface.ts too, and is checked mechanically by tests/purity.spec.ts.
+
+import { assertHexColor, type HexColor } from './engine/contrast';
 
 export type Role =
   | 'hero' // the product image — the thing being sold
@@ -19,7 +20,7 @@ export type Role =
 
 export type Priority = 1 | 2 | 3 | 4 | 5;
 
-// Which rungs of the degradation ladder (§10) this element is allowed to
+// Which rungs of the degradation ladder (degradation.ts) this element is allowed to
 // reach. Required elements (headline, CTA) may shrink but must never be
 // dropped — losing them would make the ad meaningless rather than merely
 // smaller.
@@ -48,6 +49,11 @@ export interface ImageElement<Id extends string = string> extends ElementBase<Id
   readonly intrinsicAspect: number; // w / h
   readonly fit: 'contain' | 'cover';
   readonly minShortSidePx: number; // below this it reads as an artefact
+  // The mark's dominant colour. Declaring it opts the element into the
+  // contrast constraint (contrast.ts): the resolver will prefer a zone whose
+  // backdrop clears the surface's contrast floor, and plate the mark when
+  // none does. Omit it for photographic art where one colour means nothing.
+  readonly markColor?: HexColor;
 }
 
 export interface ButtonElement<Id extends string = string> extends ElementBase<Id> {
@@ -74,6 +80,10 @@ export type AdElement<Id extends string = string> =
 export interface AdSpec<E extends readonly AdElement[] = readonly AdElement[]> {
   readonly name: string;
   readonly elements: E;
+  // The ad's own base background. It is content, like the copy — the engine
+  // only reads it to know what sits behind an element that no surface
+  // backdrop region covers (contrast.ts).
+  readonly background?: HexColor;
 }
 
 export class DuplicateElementIdError extends Error {
@@ -121,10 +131,19 @@ function assertExactlyOne(elements: readonly AdElement[], role: Role): void {
 export function defineAd<const E extends readonly AdElement[]>(spec: {
   name: string;
   elements: E;
+  background?: HexColor;
 }): AdSpec<E> {
   assertUniqueIds(spec.elements);
   assertExactlyOne(spec.elements, 'action');
   assertExactlyOne(spec.elements, 'primary');
+  // The HexColor type already rejects 'red' at compile time; this catches
+  // specs that arrive as untyped JSON.
+  if (spec.background !== undefined) assertHexColor(spec.background, 'AdSpec.background');
+  for (const el of spec.elements) {
+    if (el.type === 'image' && el.markColor !== undefined) {
+      assertHexColor(el.markColor, `Element "${el.id}".markColor`);
+    }
+  }
   return spec;
 }
 
