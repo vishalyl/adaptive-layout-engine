@@ -1,14 +1,12 @@
 // The demo shell — surface picker, true-pixel scale-to-fit stage (DOM or
 // Canvas backend), the custom surface panel with live sliders and JSON
-// paste, the diagnostics timeline, and the element inspector, all driven
-// by one `resolve()` call.
+// paste, the resolution summary and the element inspector, all driven by
+// one `resolve()` call.
 //
-// Premium UI: Obsidian & Signal — sections 2–20 of PREMIUM_UI_PLAN.md.
-// Presentation-only changes. Zero engine modifications.
 // URL persistence: all key state is synced to query params for shareable URLs.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { resolve, type ResolvedLayout } from './resolver';
+import { resolve } from './resolver';
 import type { SurfaceProfile } from './engine/surface';
 import type { TextMeasurer } from './engine/measure';
 import { ads } from './demo/creatives';
@@ -20,7 +18,6 @@ import { StageFrame } from './demo/StageFrame';
 import { SurfacePicker } from './demo/SurfacePicker';
 import { AdPicker } from './demo/AdPicker';
 import { CustomSurfacePanel, DEFAULT_CUSTOM_PROFILE } from './demo/CustomSurfacePanel';
-import { DiagnosticsPanel } from './demo/DiagnosticsPanel';
 import { ElementInspector } from './demo/ElementInspector';
 import { InfoTooltip } from './demo/InfoTooltip';
 import { GuideTab } from './demo/GuideTab';
@@ -32,11 +29,6 @@ type Selection = { readonly kind: 'shipped'; readonly key: string } | { readonly
 type Backend = 'dom' | 'canvas';
 type Tab = 'demo' | 'guide';
 
-// The "before" baseline: the original fixed-ratio surface that every ad
-// was designed for. When comparison mode is on, the left stage shows this
-// baseline and the right stage shows the adaptive layout.
-const BEFORE_PROFILE: SurfaceProfile = surfaces[0]!.profile;
-
 // ── URL helpers ──────────────────────────────────────────────────────────
 // Persist/adapt state to the query string so links are shareable and
 // bookmarkable.  We keep the encoding simple (single params, no nesting).
@@ -45,7 +37,6 @@ interface UrlState {
   ad: string | null;
   surface: string | null;
   renderer: Backend | null;
-  compare: boolean;
   debug: boolean;
   inspect: string | null;
 }
@@ -58,7 +49,6 @@ function readUrlParams(): UrlState {
     renderer: (qp.get('renderer') as Backend | null) && (qp.get('renderer') === 'dom' || qp.get('renderer') === 'canvas')
       ? (qp.get('renderer') as Backend)
       : null,
-    compare: qp.get('compare') === '1',
     debug: qp.get('debug') === '1',
     inspect: qp.has('inspect') ? qp.get('inspect') : null,
   };
@@ -89,7 +79,6 @@ function getInitialState(): {
   selectedElementId: string | null;
   backend: Backend;
   adKey: string;
-  showComparison: boolean;
 } {
   return {
     selection: urlState.surface && surfaces.some((s) => s.key === urlState.surface)
@@ -100,7 +89,6 @@ function getInitialState(): {
     selectedElementId: urlState.inspect,
     backend: urlState.renderer ?? 'dom',
     adKey: (urlState.ad && ads.some((a) => a.key === urlState.ad)) ? urlState.ad! : ads[0]!.key,
-    showComparison: urlState.compare,
   };
 }
 
@@ -114,7 +102,6 @@ export default function App() {
   const [selectedElementId, setSelectedElementId] = useState<string | null>(initial.selectedElementId);
   const [backend, setBackend] = useState<Backend>(initial.backend);
   const [adKey, setAdKey] = useState<string>(initial.adKey);
-  const [showComparison, setShowComparison] = useState(initial.showComparison);
 
   // ── URL sync: write state to URL on every change ──────────────────────
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -122,14 +109,11 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const backendRef = useRef<Backend>(backend);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const compareRef = useRef<boolean>(showComparison);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const debugRef = useRef<boolean>(showDebugOverlay);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const inspectRef = useRef<string | null>(selectedElementId);
   adKeyRef.current = adKey;
   backendRef.current = backend;
-  compareRef.current = showComparison;
   debugRef.current = showDebugOverlay;
   inspectRef.current = selectedElementId;
 
@@ -146,7 +130,6 @@ export default function App() {
       writeUrl((params) => {
         if (keys.has('ad')) params['ad'] = adKeyRef.current;
         if (keys.has('renderer')) params['renderer'] = backendRef.current;
-        if (keys.has('compare')) params['compare'] = compareRef.current ? '1' : null;
         if (keys.has('debug')) params['debug'] = debugRef.current ? '1' : null;
         if (keys.has('inspect')) params['inspect'] = inspectRef.current;
       });
@@ -170,7 +153,7 @@ export default function App() {
 
       const key = e.key;
 
-      // 1-4 → switch creative
+      // 1-N → switch creative
       const digit = parseInt(key, 10);
       if (digit >= 1 && digit <= ads.length) {
         e.preventDefault();
@@ -185,14 +168,6 @@ export default function App() {
         e.preventDefault();
         setBackend((b) => (b === 'dom' ? 'canvas' : 'dom'));
         scheduleUrlSync('renderer');
-        return;
-      }
-
-      // C → toggle compare
-      if (key.toLowerCase() === 'c') {
-        e.preventDefault();
-        setShowComparison((v) => !v);
-        scheduleUrlSync('compare');
         return;
       }
 
@@ -234,97 +209,39 @@ export default function App() {
   const activeAd = ads.find((a) => a.key === adKey) ?? ads[0]!;
 
   const layout = useMemo(() => resolve(activeAd.spec, activeProfile, { measurer }), [activeAd, activeProfile, measurer]);
-  const beforeLayout = useMemo(() => resolve(activeAd.spec, BEFORE_PROFILE, { measurer }), [activeAd, measurer]);
-
-  // ── Timing benchmark ──────────────────────────────────────────────────
-  const [benchmarkStats, setBenchmarkStats] = useState<{ avg: number; min: number; max: number; runs: number } | null>(null);
-  const [benchmarking, setBenchmarking] = useState(false);
-
-  const runBenchmark = useCallback(() => {
-    setBenchmarking(true);
-    requestAnimationFrame(() => {
-      const N = 200;
-      const times: number[] = [];
-      for (let i = 0; i < N; i++) {
-        const t0 = performance.now();
-        resolve(activeAd.spec, activeProfile, { measurer });
-        times.push(performance.now() - t0);
-      }
-      const avg = times.reduce((a, b) => a + b, 0) / N;
-      const min = Math.min(...times);
-      const max = Math.max(...times);
-      setBenchmarkStats({ avg, min, max, runs: N });
-      setBenchmarking(false);
-    });
-  }, [activeAd, activeProfile, measurer]);
-
-  // ── Stress test: resolve ad on every surface ──────────────────────────
-  const [stressResult, setStressResult] = useState<{ totalMs: number; surfaces: number; errors: number } | null>(null);
-  const [stressRunning, setStressRunning] = useState(false);
-
-  const runStressTest = useCallback(() => {
-    setStressRunning(true);
-    requestAnimationFrame(() => {
-      const t0 = performance.now();
-      let errors = 0;
-      const N = surfaces.length;
-      for (let i = 0; i < N; i++) {
-        try {
-          resolve(activeAd.spec, surfaces[i]!.profile, { measurer });
-        } catch {
-          errors++;
-        }
-      }
-      setStressResult({
-        totalMs: performance.now() - t0,
-        surfaces: N,
-        errors,
-      });
-      setStressRunning(false);
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeAd, measurer, surfaces]);
-
-  // Render a single stage. Extracted to avoid duplication in comparison mode.
-  const renderStage = (
-    widthPx: number,
-    heightPx: number,
-    layout: ResolvedLayout,
-    label: string,
-  ) => {
-    return (
-      <div className="panel panel-stage">
-        <StageFrame widthPx={widthPx} heightPx={heightPx}>
-          <div className="stage-content">
-            {backend === 'dom' ? (
-              <RenderDom
-                spec={activeAd.spec}
-                layout={layout}
-                showDebugOverlay={showDebugOverlay}
-                selectedElementId={selectedElementId}
-                onSelectElement={setSelectedElementId}
-                palette={activeAd.palette}
-              />
-            ) : (
-              <RenderCanvas
-                spec={activeAd.spec}
-                layout={layout}
-                measurer={measurer}
-                palette={activeAd.palette}
-                selectedElementId={selectedElementId}
-                onSelectElement={setSelectedElementId}
-              />
-            )}
-          </div>
-        </StageFrame>
-        <div className="stage-dims">
-          <span className="stage-dims-label mono">{Math.round(widthPx)} × {Math.round(heightPx)}</span>
-          <span className="stage-dims-unit">px</span>
+  // The stage: the active ad on the active surface, drawn by the chosen
+  // backend at true pixel size and scaled to fit.
+  const stage = (
+    <div className="panel panel-stage">
+      <StageFrame widthPx={activeProfile.widthPx} heightPx={activeProfile.heightPx}>
+        <div className="stage-content">
+          {backend === 'dom' ? (
+            <RenderDom
+              spec={activeAd.spec}
+              layout={layout}
+              showDebugOverlay={showDebugOverlay}
+              selectedElementId={selectedElementId}
+              onSelectElement={setSelectedElementId}
+              palette={activeAd.palette}
+            />
+          ) : (
+            <RenderCanvas
+              spec={activeAd.spec}
+              layout={layout}
+              measurer={measurer}
+              palette={activeAd.palette}
+              selectedElementId={selectedElementId}
+              onSelectElement={setSelectedElementId}
+            />
+          )}
         </div>
-        <span className="stage-label">{label}</span>
+      </StageFrame>
+      <div className="stage-dims">
+        <span className="stage-dims-label mono">{Math.round(activeProfile.widthPx)} × {Math.round(activeProfile.heightPx)}</span>
+        <span className="stage-dims-unit">px</span>
       </div>
-    );
-  };
+    </div>
+  );
 
   return (
     <div className="demo-app">
@@ -379,14 +296,8 @@ export default function App() {
 
           <div className="demo-layout">
             <div className="demo-column">
-              {showComparison ? (
-                <>
-                  {renderStage(BEFORE_PROFILE.widthPx, BEFORE_PROFILE.heightPx, beforeLayout, 'Before — fixed (320×480)')}
-                  {renderStage(activeProfile.widthPx, activeProfile.heightPx, layout, 'After — adaptive')}
-                </>
-              ) : (
-                renderStage(activeProfile.widthPx, activeProfile.heightPx, layout, '')
-              )}
+              {stage}
+
 
               <CustomSurfacePanel
                 activeProfile={activeProfile}
@@ -423,7 +334,7 @@ export default function App() {
                   <dd className="mono">{layout.aspectClass}</dd>
                   <dt>
                     Steps taken
-                    <InfoTooltip text="How many degradation steps the resolver needed. Each one is the gentlest step, on the worst-priority element, that actually reduced the overflow — see the diagnostics timeline." />
+                    <InfoTooltip text="How many degradation steps the resolver needed. Each one is the gentlest step, on the worst-priority element, that actually reduced the overflow. Click an element to see the steps it took." />
                   </dt>
                   <dd className="mono">{layout.diagnostics.rungsApplied.length - layout.diagnostics.restored.length}</dd>
                   <dt>
@@ -437,7 +348,6 @@ export default function App() {
               {/* Reads only the resolved layout, so it works for both backends. */}
               <ElementInspector spec={activeAd.spec} layout={layout} selectedId={selectedElementId} />
 
-              <DiagnosticsPanel layout={layout} benchmarkStats={benchmarkStats} onRunBenchmark={runBenchmark} benchmarking={benchmarking} stressResult={stressResult} onStressTest={runStressTest} stressRunning={stressRunning} />
             </div>
           </div>
 
@@ -471,18 +381,6 @@ export default function App() {
                 <InfoTooltip text="Draws the template's zone boundaries (dashed) and each element's bounding box (solid), so you can see the structure the resolver computed." />
               </label>
             )}
-            <label className="switch">
-              <input
-                type="checkbox"
-                checked={showComparison}
-                onChange={(e) => { setShowComparison(e.target.checked); scheduleUrlSync('compare'); }}
-              />
-              <span className="switch-track">
-                <span className="switch-thumb" />
-              </span>
-              <span className="switch-label">Compare</span>
-              <InfoTooltip text="Shows the fixed baseline layout (mobilePortrait) side by side with the current adaptive layout, so you can see the difference adaptive rendering makes." />
-            </label>
           </div>
           </DemoErrorBoundary>
         </div>

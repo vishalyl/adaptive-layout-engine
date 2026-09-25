@@ -39,10 +39,10 @@ npm run lint
 
 1. **Switch surfaces** — six chips: Mobile interstitial, Mobile landscape, Broadcast lower-third, Retail kiosk, Print-to-digital QR panel, and **Compact card (stress case)**.
 2. **Switch creatives** — five ads (KEEL, ORBIT, FERN, SipPulse, Provox) with different hero shapes and copy lengths. Each carries its brand as a lockup (monogram + name) at priority 2, so the brand name survives on every surface that has any room for it.
-3. **Read the diagnostics** — the timeline lists every step the resolver took, what it saved, and which worse-priority elements were tried first. Click any element on the stage for the inspector: its slot, size, font, steps taken and contrast.
+3. **Inspect an element** — click any element on the stage for the inspector: its slot, size, font, the steps it took and its contrast. The resolution summary shows the status, template, aspect class and step count.
 4. **Custom surface** — drag the sliders or paste a JSON surface profile to resolve a surface the engine has never seen.
 5. **Renderer toggle** — DOM and Canvas draw the same resolved layout independently.
-6. **Keyboard** — `1`–`5` switch creatives, `R` renderer, `C` compare, `D` debug overlay (slot boundaries and element boxes).
+6. **Keyboard** — `1`–`5` switch creatives, `R` renderer, `D` debug overlay (slot boundaries and element boxes).
 
 The stress case is the one to watch: on a 320×180 card, KEEL drops **legal (priority 5)**, then **QR and badge (4)**, then — only as the very last thing — the **logo (2)** — and the headline, price, CTA and hero all survive intact.
 

@@ -69,18 +69,6 @@
   --warn:    #E3A93A;   --warn-wash:    rgba(227, 169, 58, 0.12);   --warn-edge:    rgba(227, 169, 58, 0.35);
   --danger:  #E8624A;   --danger-wash:  rgba(232, 98, 74, 0.12);    --danger-edge:  rgba(232, 98, 74, 0.35);
 
-  /* --- A7. Phase colours (diagnostics timeline) --------
-     Seven resolver phases, seven hues at identical low chroma so
-     the timeline scans as one object with coded rows, not a
-     rainbow. */
-  --phase-normalise: #7FA8D9;
-  --phase-classify:  #6FBFC9;
-  --phase-select:    #7BC79A;
-  --phase-demand:    #C3BE72;
-  --phase-partition: #D2A171;
-  --phase-allocate:  #D28B93;
-  --phase-validate:  #A692D6;
-
   /* --- A8. Type --------------------------------------------- */
   --font-sans: 'Inter Tight', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
@@ -282,7 +270,7 @@ body::after {
 /* Any element that displays a changing number must not reflow as
    it changes. Applied broadly. */
 .demo-kv dd, .kv dd, .field b, .field-value, .chip-dims, .stage-dims-value, .stage-dims-scale,
-.stat-value, .timeline-row, .demo-inspector-value {
+.demo-inspector-value {
   font-variant-numeric: tabular-nums;
 }
 
@@ -408,8 +396,6 @@ p { margin: 0; text-wrap: pretty; }
   color: var(--text-hi);
   letter-spacing: var(--track-normal);
 }
-.panel-head-meta { font-size: var(--fs-2xs); color: var(--text-low); }
-
 .panel-sub { font-size: var(--fs-2xs); color: var(--text-low); margin: calc(var(--sp-3) * -1) 0 var(--sp-4); }
 
 .demo-layout {
@@ -434,22 +420,9 @@ p { margin: 0; text-wrap: pretty; }
     padding-right: var(--sp-1);
   }
 
-/* Comparison mode — two stages stacked vertically in the left column */
 .demo-column { gap: var(--sp-6); }
-.demo-column > .panel-stage:not(:first-of-type) {
-  opacity: 0.85;
-}
-.stage-label {
-  display: block;
-  font-size: var(--fs-2xs);
-  color: var(--text-faint);
-  text-align: center;
-  margin-top: var(--sp-2);
-  text-transform: uppercase;
-  letter-spacing: var(--track-loose);
-}
 
-/* Stage bar for comparison toggle */
+/* The bar under the stage: renderer and debug-overlay controls. */
 .stage-bar {
   display: flex;
   flex-wrap: wrap;
@@ -574,14 +547,6 @@ p { margin: 0; text-wrap: pretty; }
 /* --- E5. Sizes */
 .btn-sm { height: 28px; padding: 0 var(--sp-3); font-size: var(--fs-2xs); border-radius: var(--r-xs); }
 .btn-lg { height: 40px; padding: 0 var(--sp-5); font-size: var(--fs-sm); }
-
-/* --- E6. Success morph — used by "Copy trace". The button turns
-   green and swaps its icon, then reverts. */
-.btn.is-success {
-  background: linear-gradient(180deg, var(--ok), #2E9463) !important;
-  color: #04140C !important;
-  border-color: transparent !important;
-}
 
 /* ============================================================
    F. BRAND HEADER
@@ -1362,22 +1327,6 @@ p { margin: 0; text-wrap: pretty; }
   margin-bottom: var(--sp-4);
 }
 
-.stat-strip {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
-  gap: 1px;
-  background: var(--line-faint);
-  border: 1px solid var(--line-faint);
-  border-radius: var(--r-xs);
-  overflow: hidden;
-  margin-bottom: var(--sp-4);
-}
-.stat { display: flex; flex-direction: column; gap: 2px; padding: var(--sp-2) var(--sp-3); background: var(--ink-800); }
-.stat-label { font-size: var(--fs-3xs); color: var(--text-low); }
-.stat-value { font-size: var(--fs-sm); color: var(--text-hi); font-weight: 500; }
-.stat-value em { font-style: normal; font-size: var(--fs-3xs); color: var(--text-low); margin-left: 1px; }
-
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 0; margin: 0 0 var(--sp-4); }
 .kv dt,
 .kv dd {
@@ -1418,151 +1367,6 @@ p { margin: 0; text-wrap: pretty; }
 .empty > svg { width: 20px; height: 20px; opacity: 0.5; margin-bottom: var(--sp-1); }
 .empty-title { font-size: var(--fs-xs); font-weight: 600; color: var(--text-mid); }
 .empty-hint  { font-size: var(--fs-2xs); line-height: var(--lh-snug); max-width: 30ch; }
-
-/* ============================================================
-   L. TIMELINE
-   ============================================================ */
-
-.timeline { margin-bottom: var(--sp-4); }
-
-.timeline-list {
-  list-style: none;
-  margin: 0;
-  padding: 0 0 0 var(--sp-4);
-  max-height: 340px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  position: relative;
-  /* The rail. A vertical hairline the nodes sit on, fading at both
-     ends so it doesn't collide with the scroll edges. */
-  background:
-    linear-gradient(180deg, transparent, var(--line) 6%, var(--line) 94%, transparent) 5px 0 / 1px 100% no-repeat;
-  mask-image: linear-gradient(180deg, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
-}
-
-.timeline-row {
-  position: relative;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-areas: 'phase note';
-  align-items: start;
-  gap: 2px var(--sp-2);
-  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3);
-  border-radius: var(--r-xs);
-  font-size: var(--fs-2xs);
-  line-height: var(--lh-snug);
-  transition: background var(--dur-2) var(--ease-out);
-  /* Staggered entrance, capped so a 40-decision trace doesn't take
-     two seconds to appear. */
-  animation: row-in var(--dur-3) var(--ease-out) backwards;
-  animation-delay: calc(min(var(--i, 0) * 14ms, 320ms));
-}
-@keyframes row-in { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
-
-.timeline-row:hover { background: rgba(255, 255, 255, 0.032); }
-
-.timeline-node {
-  position: absolute;
-  left: -12px;
-  top: 12px;
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  background: var(--phase-color, var(--text-faint));
-  box-shadow: 0 0 0 3px var(--ink-800), 0 0 9px -1px var(--phase-color, transparent);
-}
-
-.timeline-phase {
-  grid-area: phase;
-  align-self: center;
-  font-family: var(--font-mono);
-  font-size: var(--fs-3xs);
-  font-weight: 500;
-  letter-spacing: var(--track-wide);
-  color: var(--phase-color, var(--text-mid));
-  background: color-mix(in srgb, var(--phase-color, #888) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--phase-color, #888) 26%, transparent);
-  border-radius: 4px;
-  padding: 1px 5px;
-  white-space: nowrap;
-}
-
-.timeline-note { grid-area: note; color: var(--text); word-break: break-word; }
-
-/* Phase colour binding. One line per phase; unknown phases fall back. */
-.timeline-row[data-phase='normalise'] { --phase-color: var(--phase-normalise); }
-.timeline-row[data-phase='classify']  { --phase-color: var(--phase-classify); }
-.timeline-row[data-phase='select']    { --phase-color: var(--phase-select); }
-.timeline-row[data-phase='demand']    { --phase-color: var(--phase-demand); }
-.timeline-row[data-phase='partition'] { --phase-color: var(--phase-partition); }
-.timeline-row[data-phase='allocate']  { --phase-color: var(--phase-allocate); }
-.timeline-row[data-phase='validate']  { --phase-color: var(--phase-validate); }
-
-/* Count tag next to a section label. */
-.count-tag {
-  font-size: var(--fs-3xs);
-  color: var(--text-low);
-  background: var(--ink-800);
-  border: 1px solid var(--line-faint);
-  border-radius: 4px;
-  padding: 0 5px;
-}
-
-.drops { margin-bottom: var(--sp-4); }
-.drops-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
-.drops-item {
-  display: flex; align-items: baseline; gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
-  background: var(--warn-wash);
-  border-left: 2px solid var(--warn-edge);
-  border-radius: 0 var(--r-xs) var(--r-xs) 0;
-  font-size: var(--fs-2xs);
-}
-.drops-id { font-family: var(--font-mono); font-weight: 500; color: var(--text-hi); }
-.drops-reason { color: var(--text-mid); }
-
-/* Timing benchmark */
-.benchmark {
-  margin-bottom: var(--sp-5);
-  padding: var(--sp-3) var(--sp-4);
-  border: 1px solid var(--line-subtle);
-  border-radius: var(--r-sm);
-  background: var(--ink-800);
-}
-.benchmark-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: var(--sp-3);
-}
-.benchmark-header h3 {
-  margin: 0;
-  font-size: var(--fs-2xs);
-  text-transform: uppercase;
-  letter-spacing: var(--track-loose);
-  color: var(--text-mid);
-}
-.benchmark-row {
-  height: 8px;
-  background: var(--ink-700);
-  border-radius: var(--r-sm);
-  overflow: hidden;
-  margin-bottom: var(--sp-2);
-}
-.benchmark-bar {
-  height: 100%;
-  background: var(--accent-surface);
-  border-radius: var(--r-sm);
-  transition: width 200ms var(--ease);
-}
-.benchmark-stats {
-  display: flex;
-  gap: var(--sp-4);
-  flex-wrap: wrap;
-}
-.benchmark-stats .mono {
-  font-size: var(--fs-2xs);
-  color: var(--text-mid);
-}
 
 /* ============================================================
    M. TOOLTIP

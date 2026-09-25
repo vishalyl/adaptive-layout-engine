@@ -72,8 +72,8 @@ export function GuideTab({ onBack }: GuideTabProps) {
         <ol className="demo-guide-steps">
           <li>Click through the surface chips and watch the same ad recompose differently on each.</li>
           <li>
-            Pick <b>Compact card</b> — the stress case — and read the diagnostics timeline: legal goes first, then QR
-            and badge, then the logo, and the headline, price and CTA survive intact. Each step says what it saved.
+            Pick <b>Compact card</b> — the stress case: legal goes first, then QR and badge, then the logo, and the
+            headline, price and CTA survive intact. Click any element to see the steps it took.
           </li>
           <li>
             Pick <b>Retail kiosk</b>, then drag the <b>Height</b> slider down in Custom surface — the layout recomposes

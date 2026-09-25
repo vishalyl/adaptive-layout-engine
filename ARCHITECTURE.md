@@ -175,7 +175,7 @@ If no element anywhere has a helpful step, what's left can't be fixed by the spe
 
 ## 8. Explaining one element's position
 
-Every placement is traceable from the diagnostics (the demo shows them; `Copy trace` exports JSON):
+Every placement is traceable from `layout.diagnostics`, which `resolve()` returns with every layout (the demo's element inspector shows the per-element part):
 
 1. `normalise` / `classify` / `select`: which template, and why.
 2. `demand`: the element's floor, and why (e.g. "label floored at 32px by the surface's minimum text size").
